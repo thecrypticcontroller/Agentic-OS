@@ -543,3 +543,196 @@ def test_worker_name_configuration(
     importlib.reload(worker_module)
 
     assert worker_module.WORKER_NAME == "agent-os-worker"
+
+
+def test_worker_claim_slots_respect_registry_capacity(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from tools.worker_registry import WorkerRegistry
+    from workers.worker import available_claim_slots
+
+    db = tmp_path / "runtime.db"
+
+    control = RuntimeControl(db)
+    registry = WorkerRegistry(db)
+
+    worker = registry.register(
+        worker_id="worker-capacity",
+        concurrency=4,
+    )
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=3,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 1
+
+
+def test_worker_claim_slots_use_lower_of_capacity_and_local_slots(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from tools.worker_registry import WorkerRegistry
+    from workers.worker import available_claim_slots
+
+    db = tmp_path / "runtime.db"
+
+    control = RuntimeControl(db)
+    registry = WorkerRegistry(db)
+
+    worker = registry.register(
+        worker_id="worker-capacity",
+        concurrency=8,
+    )
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=2,
+    )
+
+    assert available_claim_slots(
+        3,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 3
+
+
+def test_worker_claim_slots_zero_when_registry_at_capacity(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from tools.worker_registry import WorkerRegistry
+    from workers.worker import available_claim_slots
+
+    db = tmp_path / "runtime.db"
+
+    control = RuntimeControl(db)
+    registry = WorkerRegistry(db)
+
+    worker = registry.register(
+        worker_id="worker-full",
+        concurrency=4,
+    )
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=4,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 0
+
+
+def test_worker_claim_and_finish_update_registry_capacity(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from tools.worker_registry import WorkerRegistry
+    from workers.worker import available_claim_slots
+
+    db = tmp_path / "runtime.db"
+
+    control = RuntimeControl(db)
+    registry = WorkerRegistry(db)
+
+    worker = registry.register(
+        worker_id="worker-live",
+        concurrency=4,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 4
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=1,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 3
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=0,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 4
+
+
+def test_capacity_aware_claim_slots_after_active_run_change(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from tools.worker_registry import WorkerRegistry
+    from workers.worker import available_claim_slots
+
+    db = tmp_path / "runtime.db"
+
+    control = RuntimeControl(db)
+    registry = WorkerRegistry(db)
+
+    worker = registry.register(
+        worker_id="worker-integration",
+        concurrency=4,
+    )
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=2,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 2
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=4,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 0
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=1,
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 3

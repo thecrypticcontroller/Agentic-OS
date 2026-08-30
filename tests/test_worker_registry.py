@@ -408,3 +408,108 @@ def test_same_instance_id_is_rejected(
         raise AssertionError(
             "Expected duplicate instance_id to be rejected"
         )
+
+
+def test_snapshot_reports_capacity_breakdown(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    running_one = registry.register(
+        worker_name="worker-a",
+        concurrency=4,
+    )
+
+    running_two = registry.register(
+        worker_name="worker-b",
+        concurrency=2,
+    )
+
+    draining = registry.register(
+        worker_name="worker-c",
+        concurrency=4,
+    )
+
+    registry.heartbeat(
+        running_one.worker_id,
+        active_runs=2,
+    )
+
+    registry.heartbeat(
+        running_two.worker_id,
+        active_runs=1,
+    )
+
+    registry.drain(
+        draining.worker_id
+    )
+
+    registry.heartbeat(
+        draining.worker_id,
+        active_runs=3,
+    )
+
+    snapshot = registry.snapshot()
+
+    assert snapshot["count"] == 3
+    assert snapshot["healthy"] == 3
+    assert snapshot["active_runs"] == 6
+
+    assert snapshot["total_capacity"] == 10
+    assert snapshot["healthy_capacity"] == 10
+    assert snapshot["running_capacity"] == 6
+    assert snapshot["draining_capacity"] == 4
+    assert snapshot["available_capacity"] == 3
+
+
+def test_snapshot_never_reports_negative_available_capacity(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    worker = registry.register(
+        worker_name="worker-a",
+        concurrency=2,
+    )
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=5,
+    )
+
+    snapshot = registry.snapshot()
+
+    assert snapshot["total_capacity"] == 2
+    assert snapshot["running_capacity"] == 2
+    assert snapshot["available_capacity"] == 0
+
+
+def test_stopped_worker_does_not_contribute_healthy_capacity(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    worker = registry.register(
+        worker_name="worker-a",
+        concurrency=4,
+    )
+
+    registry.stop(
+        worker.worker_id
+    )
+
+    snapshot = registry.snapshot()
+
+    assert snapshot["count"] == 1
+    assert snapshot["healthy"] == 0
+    assert snapshot["total_capacity"] == 4
+    assert snapshot["healthy_capacity"] == 0
+    assert snapshot["running_capacity"] == 0
+    assert snapshot["draining_capacity"] == 0
+    assert snapshot["available_capacity"] == 0
