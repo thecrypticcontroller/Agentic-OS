@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -184,6 +185,38 @@ def provider_decisions(
         "capability": capability,
         "allow_reserve": allow_reserve,
         "decisions": [item.to_dict() for item in decisions],
+    }
+
+
+@app.get("/v1/runtime")
+def get_runtime() -> dict[str, Any]:
+    total = registry.count()
+    queued = len(registry.list_runs(status="queued", limit=100))
+    running = len(registry.list_runs(status="running", limit=100))
+    adaptive = (
+        os.getenv("AGENT_OS_ADAPTIVE_ROUTING", "false")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"}
+    )
+    concurrency = max(
+        1,
+        int(os.getenv("AGENT_OS_WORKER_CONCURRENCY", "4")),
+    )
+    return {
+        "service": "agent-os",
+        "status": "ok",
+        "runs": {
+            "total": total,
+            "queued": queued,
+            "running": running,
+        },
+        "worker": {
+            "configured_concurrency": concurrency,
+        },
+        "routing": {
+            "adaptive": adaptive,
+        },
     }
 
 
