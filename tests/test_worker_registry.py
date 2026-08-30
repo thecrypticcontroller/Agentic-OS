@@ -261,3 +261,150 @@ def test_is_stale_returns_false_for_healthy_worker(
         worker.worker_id,
         stale_after_seconds=30,
     ) is False
+
+
+def test_rejoin_same_logical_worker_gets_new_instance(
+    tmp_path,
+):
+    db = tmp_path / "test.db"
+
+    registry = WorkerRegistry(db)
+
+    first = registry.register(
+        worker_name="researcher-01",
+        hostname="test-host",
+        pid=100,
+        concurrency=4,
+    )
+
+    registry.stop(
+        first.worker_id
+    )
+
+    second = registry.register(
+        worker_name="researcher-01",
+        hostname="test-host",
+        pid=200,
+        concurrency=4,
+    )
+
+    assert first.worker_name == "researcher-01"
+    assert second.worker_name == "researcher-01"
+
+    assert first.instance_id
+    assert second.instance_id
+    assert first.instance_id != second.instance_id
+
+    assert first.worker_id != second.worker_id
+
+    assert first.pid == 100
+    assert second.pid == 200
+
+    first_loaded = registry.get(
+        first.worker_id
+    )
+    second_loaded = registry.get(
+        second.worker_id
+    )
+
+    assert first_loaded is not None
+    assert second_loaded is not None
+
+    assert first_loaded.status == "stopped"
+    assert second_loaded.status == "running"
+
+
+def test_explicit_instance_id_is_persisted(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    worker = registry.register(
+        worker_name="researcher-01",
+        instance_id="instance-abc",
+        worker_id="worker-abc",
+    )
+
+    loaded = registry.get(
+        worker.worker_id
+    )
+
+    assert loaded is not None
+    assert loaded.worker_name == "researcher-01"
+    assert loaded.instance_id == "instance-abc"
+
+
+def test_runtime_snapshot_exposes_worker_identity(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    worker = registry.register(
+        worker_name="researcher-01",
+        hostname="test-host",
+        pid=321,
+        concurrency=4,
+    )
+
+    snapshot = registry.snapshot()
+
+    assert snapshot["count"] == 1
+
+    item = snapshot["workers"][0]
+
+    assert item["worker_id"] == worker.worker_id
+    assert item["worker_name"] == "researcher-01"
+    assert item["instance_id"] == worker.instance_id
+    assert item["hostname"] == "test-host"
+    assert item["pid"] == 321
+    assert item["concurrency"] == 4
+    assert item["status"] == "running"
+
+
+def test_register_rejects_invalid_concurrency(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    try:
+        registry.register(
+            worker_name="worker-1",
+            concurrency=0,
+        )
+    except ValueError as exc:
+        assert "concurrency" in str(exc)
+    else:
+        raise AssertionError(
+            "Expected ValueError for invalid concurrency"
+        )
+
+
+def test_same_instance_id_is_rejected(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    registry.register(
+        worker_name="worker-1",
+        instance_id="instance-1",
+    )
+
+    try:
+        registry.register(
+            worker_name="worker-2",
+            instance_id="instance-1",
+        )
+    except Exception as exc:
+        assert "unique" in str(exc).lower() or "constraint" in str(exc).lower()
+    else:
+        raise AssertionError(
+            "Expected duplicate instance_id to be rejected"
+        )

@@ -58,6 +58,11 @@ WORKER_CONCURRENCY = max(
     ),
 )
 
+WORKER_NAME = os.environ.get(
+    "AGENT_OS_WORKER_NAME",
+    "agent-os-worker",
+)
+
 
 def available_claim_slots(
     available_slots: int,
@@ -232,6 +237,7 @@ def worker_loop() -> None:
     )
 
     worker_record = worker_registry.register(
+        worker_name=WORKER_NAME,
         concurrency=WORKER_CONCURRENCY,
     )
 

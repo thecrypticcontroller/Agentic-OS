@@ -19,6 +19,8 @@ class WorkerRecord:
     concurrency: int
     active_runs: int
     status: str
+    worker_name: str = "agent-os-worker"
+    instance_id: str = ""
 
 
 class WorkerRegistry:
@@ -58,8 +60,63 @@ class WorkerRegistry:
                     last_heartbeat TEXT NOT NULL,
                     concurrency INTEGER NOT NULL,
                     active_runs INTEGER NOT NULL DEFAULT 0,
-                    status TEXT NOT NULL
+                    status TEXT NOT NULL,
+                    worker_name TEXT,
+                    instance_id TEXT
                 )
+                """
+            )
+
+            worker_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(workers)"
+                ).fetchall()
+            }
+
+            if "worker_name" not in worker_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE workers
+                    ADD COLUMN worker_name TEXT
+                    """
+                )
+
+            if "instance_id" not in worker_columns:
+                connection.execute(
+                    """
+                    ALTER TABLE workers
+                    ADD COLUMN instance_id TEXT
+                    """
+                )
+
+            connection.execute(
+                """
+                UPDATE workers
+                SET worker_name = COALESCE(
+                    worker_name,
+                    worker_id
+                )
+                WHERE worker_name IS NULL
+                """
+            )
+
+            connection.execute(
+                """
+                UPDATE workers
+                SET instance_id = COALESCE(
+                    instance_id,
+                    worker_id
+                )
+                WHERE instance_id IS NULL
+                """
+            )
+
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                idx_workers_instance_id
+                ON workers(instance_id)
                 """
             )
 
@@ -69,6 +126,8 @@ class WorkerRegistry:
         self,
         *,
         worker_id: str | None = None,
+        worker_name: str | None = None,
+        instance_id: str | None = None,
         hostname: str | None = None,
         pid: int | None = None,
         concurrency: int = 1,
@@ -82,8 +141,19 @@ class WorkerRegistry:
             timezone.utc
         ).isoformat()
 
+        process_worker_id = (
+            worker_id
+            or str(uuid.uuid4())
+        )
+
+        logical_worker_name = (
+            worker_name
+            or worker_id
+            or "agent-os-worker"
+        )
+
         record = WorkerRecord(
-            worker_id=worker_id or str(uuid.uuid4()),
+            worker_id=process_worker_id,
             hostname=hostname or socket.gethostname(),
             pid=pid if pid is not None else os.getpid(),
             started_at=now,
@@ -91,6 +161,8 @@ class WorkerRegistry:
             concurrency=concurrency,
             active_runs=0,
             status="running",
+            worker_name=logical_worker_name,
+            instance_id=instance_id or str(uuid.uuid4()),
         )
 
         with self._connect() as connection:
@@ -104,9 +176,11 @@ class WorkerRegistry:
                     last_heartbeat,
                     concurrency,
                     active_runs,
-                    status
+                    status,
+                    worker_name,
+                    instance_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.worker_id,
@@ -117,6 +191,8 @@ class WorkerRegistry:
                     record.concurrency,
                     record.active_runs,
                     record.status,
+                    record.worker_name,
+                    record.instance_id,
                 ),
             )
             connection.commit()
@@ -312,6 +388,8 @@ class WorkerRegistry:
             normalized.append(
                 {
                     "worker_id": worker.worker_id,
+                    "worker_name": worker.worker_name,
+                    "instance_id": worker.instance_id,
                     "hostname": worker.hostname,
                     "pid": worker.pid,
                     "started_at": worker.started_at,
@@ -354,4 +432,16 @@ class WorkerRegistry:
             concurrency=int(row["concurrency"]),
             active_runs=int(row["active_runs"]),
             status=row["status"],
+            worker_name=(
+                row["worker_name"]
+                if "worker_name" in row.keys()
+                and row["worker_name"] is not None
+                else row["worker_id"]
+            ),
+            instance_id=(
+                row["instance_id"]
+                if "instance_id" in row.keys()
+                and row["instance_id"] is not None
+                else row["worker_id"]
+            ),
         )
