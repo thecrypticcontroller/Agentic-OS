@@ -1,6 +1,8 @@
 ﻿from __future__ import annotations
 
 import os
+import re
+import time
 from dataclasses import dataclass
 
 import google.genai as genai
@@ -12,6 +14,9 @@ from tools.cost_control import (
 from tools.model_router import (
     estimate_cost_usd,
     route_task,
+)
+from tools.provider_observability import (
+    ProviderObservability,
 )
 
 
@@ -34,6 +39,7 @@ class GeminiClient:
         *,
         cost_controller: CostController | None = None,
         run_id: str | None = None,
+        observer: ProviderObservability | None = None,
     ) -> None:
         key = (
             api_key
@@ -53,6 +59,9 @@ class GeminiClient:
             cost_controller
         )
         self.run_id = run_id
+        self.observer = (
+            observer or ProviderObservability()
+        )
 
     @staticmethod
     def _estimate_input_tokens(
@@ -65,6 +74,53 @@ class GeminiClient:
             1,
             (len(prompt) + 3) // 4,
         )
+
+    def _record_observation(
+        self,
+        *,
+        started: float,
+        status: str,
+        model: str,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        thinking_tokens: int = 0,
+        total_tokens: int = 0,
+        estimated_cost_usd: float = 0.0,
+        error: Exception | None = None,
+    ) -> None:
+        """Telemetry is best-effort and must never break generation."""
+        try:
+            safe_error = None
+            if error is not None:
+                safe_error = re.sub(
+                    r"[A-Za-z0-9_\-]{32,}",
+                    "[REDACTED]",
+                    str(error),
+                )[:200]
+
+            self.observer.record(
+                provider="gemini",
+                operation="generate",
+                status=status,
+                latency_ms=int(
+                    (time.perf_counter() - started) * 1000
+                ),
+                run_id=self.run_id,
+                model=model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                thinking_tokens=thinking_tokens,
+                total_tokens=total_tokens,
+                estimated_cost_usd=estimated_cost_usd,
+                error_type=(
+                    type(error).__name__
+                    if error is not None
+                    else None
+                ),
+                error=safe_error,
+            )
+        except Exception:
+            pass
 
     def generate(
         self,
@@ -98,6 +154,7 @@ class GeminiClient:
         )
 
         reservation_usd = 0.0
+        started_perf = time.perf_counter()
 
         if (
             self.cost_controller is not None
@@ -143,7 +200,7 @@ class GeminiClient:
                 )
             )
 
-        except Exception:
+        except Exception as exc:
             if (
                 self.cost_controller is not None
                 and effective_run_id is not None
@@ -154,6 +211,12 @@ class GeminiClient:
                     reservation_usd,
                 )
 
+            self._record_observation(
+                started=started_perf,
+                status="failed",
+                model=selected_model,
+                error=exc,
+            )
             raise
 
         usage = getattr(
@@ -233,6 +296,17 @@ class GeminiClient:
                 reservation_usd=reservation_usd,
             )
 
+        self._record_observation(
+            started=started_perf,
+            status="success",
+            model=selected_model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            thinking_tokens=thinking_tokens,
+            total_tokens=total_tokens,
+            estimated_cost_usd=actual_cost,
+        )
+
         return GenerationResult(
             prompt=prompt,
             model=selected_model,
@@ -252,10 +326,12 @@ def generate(
     max_output_tokens: int = 2048,
     run_id: str | None = None,
     cost_controller: CostController | None = None,
+    observer: ProviderObservability | None = None,
 ) -> GenerationResult:
     client = GeminiClient(
         cost_controller=cost_controller,
         run_id=run_id,
+        observer=observer,
     )
 
     return client.generate(
