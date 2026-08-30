@@ -518,3 +518,28 @@ def test_worker_claim_slots_zero_when_worker_missing(
         registry,
         "missing-worker",
     ) == 0
+
+
+def test_worker_name_configuration(
+    monkeypatch,
+):
+    monkeypatch.setenv(
+        "AGENT_OS_WORKER_NAME",
+        "researcher-01",
+    )
+
+    import importlib
+    import workers.worker as worker_module
+
+    importlib.reload(worker_module)
+
+    assert worker_module.WORKER_NAME == "researcher-01"
+
+    monkeypatch.delenv(
+        "AGENT_OS_WORKER_NAME",
+        raising=False,
+    )
+
+    importlib.reload(worker_module)
+
+    assert worker_module.WORKER_NAME == "agent-os-worker"
