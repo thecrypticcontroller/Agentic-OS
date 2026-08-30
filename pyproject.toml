@@ -1,0 +1,25 @@
+[project]
+name = "agent-os"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "browser-use>=0.1.10",
+    "crewai>=0.148.0",
+    "fastapi>=0.141.1",
+    "firecrawl-py>=4.40.0",
+    "google-genai>=1.65.0",
+    "mcp[cli]>=1.26.0",
+    "python-dotenv>=1.2.2",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
