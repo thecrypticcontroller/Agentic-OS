@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from agents.manager import Manager
 from tools.run_registry import RunRegistry
 from tools.runtime_control import RuntimeControl
+from tools.worker_registry import WorkerRegistry
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -212,6 +213,16 @@ def worker_loop() -> None:
         PROJECT_ROOT / "agent_os.db"
     )
 
+    worker_registry = WorkerRegistry(
+        PROJECT_ROOT / "agent_os.db"
+    )
+
+    worker_record = worker_registry.register(
+        concurrency=WORKER_CONCURRENCY,
+    )
+
+    worker_id = worker_record.worker_id
+
     print(
         "Agent OS concurrent worker started.",
         flush=True,
@@ -235,11 +246,22 @@ def worker_loop() -> None:
     futures: dict[Future, str] = {}
 
     last_recovery = 0.0
+    last_worker_heartbeat = 0.0
 
     try:
         while True:
             try:
                 now = time.monotonic()
+
+                if (
+                    now - last_worker_heartbeat
+                    >= HEARTBEAT_INTERVAL_SECONDS
+                ):
+                    worker_registry.heartbeat(
+                        worker_id,
+                        active_runs=len(futures),
+                    )
+                    last_worker_heartbeat = now
 
                 if (
                     now - last_recovery
@@ -357,6 +379,10 @@ def worker_loop() -> None:
 
         executor.shutdown(
             wait=True
+        )
+
+        worker_registry.stop(
+            worker_id
         )
 
         print(

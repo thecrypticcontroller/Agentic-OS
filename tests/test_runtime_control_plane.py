@@ -35,6 +35,10 @@ class TestRuntimeEndpoint:
         assert "running" in payload["runs"]
         assert "worker" in payload
         assert "configured_concurrency" in payload["worker"]
+        assert "count" in payload["worker"]
+        assert "healthy" in payload["worker"]
+        assert "active_runs" in payload["worker"]
+        assert "workers" in payload["worker"]
         assert "routing" in payload
         assert "adaptive" in payload["routing"]
 
@@ -380,3 +384,46 @@ def test_resume_queue_endpoint(
     assert response.status_code == 200
     assert response.json()["queue"]["paused"] is False
     assert control.is_queue_paused() is False
+
+
+def test_runtime_reports_worker_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    workers = WorkerRegistry(
+        tmp_path / "runtime.db"
+    )
+
+    workers.register(
+        worker_id="worker-1",
+        hostname="test-host",
+        pid=123,
+        concurrency=4,
+    )
+
+    workers.heartbeat(
+        "worker-1",
+        active_runs=2,
+    )
+
+    monkeypatch.setattr(
+        app_module,
+        "worker_registry",
+        workers,
+    )
+
+    response = client.get(
+        "/v1/runtime"
+    )
+
+    assert response.status_code == 200
+
+    worker_payload = response.json()["worker"]
+
+    assert worker_payload["count"] == 1
+    assert worker_payload["healthy"] == 1
+    assert worker_payload["active_runs"] == 2
+    assert worker_payload["configured_concurrency"] == 4
+    assert worker_payload["workers"][0]["worker_id"] == "worker-1"

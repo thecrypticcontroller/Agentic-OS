@@ -18,6 +18,7 @@ from tools.provider_observability import ProviderObservability
 from tools.provider_registry import PROVIDERS
 from tools.run_registry import RunRegistry
 from tools.runtime_control import RuntimeControl
+from tools.worker_registry import WorkerRegistry
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,7 @@ cost_intelligence = CostIntelligence(observability, cost_controller)
 decision_engine = ProviderDecisionEngine(health_service, cost_intelligence)
 manager = Manager(registry=registry)
 runtime_control = RuntimeControl(PROJECT_ROOT / "agent_os.db")
+worker_registry = WorkerRegistry(PROJECT_ROOT / "agent_os.db")
 
 
 class CreateJobRequest(BaseModel):
@@ -215,6 +217,7 @@ def get_runtime() -> dict[str, Any]:
         },
         "worker": {
             "configured_concurrency": concurrency,
+            **worker_registry.snapshot(),
         },
         "queue": runtime_control.snapshot(),
         "routing": {
