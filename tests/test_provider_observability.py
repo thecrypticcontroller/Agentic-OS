@@ -73,7 +73,8 @@ def test_provider_router_persists_attempts(tmp_path, monkeypatch):
         "BRAVE_API_KEY",
         "test-key",
     )
-    monkeypatch.setattr(
+    original = _SEARCH_ADAPTERS["brave"]
+    monkeypatch.setitem(
         _SEARCH_ADAPTERS,
         "brave",
         lambda query, limit, key: [
@@ -85,10 +86,13 @@ def test_provider_router_persists_attempts(tmp_path, monkeypatch):
         ],
     )
 
-    results = router.search(
-        "example",
-        limit=1,
-    )
+    try:
+        results = router.search(
+            "example",
+            limit=1,
+        )
+    finally:
+        _SEARCH_ADAPTERS["brave"] = original
 
     assert results[0].title == "Example"
 
