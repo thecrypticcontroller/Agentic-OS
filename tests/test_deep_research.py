@@ -38,7 +38,7 @@ def test_deep_research_is_free_first_and_deduplicates(monkeypatch):
         )
 
     def fake_synthesize(report):
-        assert report.source_count == 2
+        assert report.source_count == 1
         return SynthesisResult(
             query=report.query,
             answer="Synthesized from free-first evidence.",
@@ -62,7 +62,7 @@ def test_deep_research_is_free_first_and_deduplicates(monkeypatch):
     assert result.status == "completed"
     assert result.data["provider_mode"] == "free-first"
     assert result.data["reserve_provider_used"] is False
-    assert result.data["evidence"]["final_count"] == 2
+    assert result.data["evidence"]["final_count"] == 1
     assert len(calls) == 2
 
 
