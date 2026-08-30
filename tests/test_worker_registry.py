@@ -135,3 +135,129 @@ def test_snapshot_counts_healthy_workers_and_active_runs(
     assert snapshot["count"] == 2
     assert snapshot["healthy"] == 2
     assert snapshot["active_runs"] == 3
+
+
+def test_drain_worker(tmp_path):
+    db = tmp_path / "test.db"
+
+    registry = WorkerRegistry(db)
+
+    registry.register(
+        worker_id="worker-1",
+        concurrency=4,
+    )
+
+    assert registry.drain(
+        "worker-1"
+    ) is True
+
+    worker = registry.get("worker-1")
+
+    assert worker is not None
+    assert worker.status == "draining"
+
+
+def test_heartbeat_preserves_draining_state(
+    tmp_path,
+):
+    db = tmp_path / "test.db"
+
+    registry = WorkerRegistry(db)
+
+    registry.register(
+        worker_id="worker-1",
+        concurrency=4,
+    )
+
+    registry.drain(
+        "worker-1"
+    )
+
+    assert registry.heartbeat(
+        "worker-1",
+        active_runs=2,
+    ) is True
+
+    worker = registry.get("worker-1")
+
+    assert worker is not None
+    assert worker.status == "draining"
+    assert worker.active_runs == 2
+
+
+def test_draining_worker_is_healthy_until_stopped(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    registry.register(
+        worker_id="worker-1",
+        concurrency=4,
+    )
+
+    registry.drain(
+        "worker-1"
+    )
+
+    snapshot = registry.snapshot()
+
+    assert snapshot["count"] == 1
+    assert snapshot["healthy"] == 1
+    assert snapshot["workers"][0]["status"] == "draining"
+
+
+def test_is_stale_detects_expired_heartbeat(
+    tmp_path,
+):
+    db = tmp_path / "test.db"
+
+    registry = WorkerRegistry(db)
+
+    worker = registry.register(
+        worker_id="worker-1",
+        concurrency=4,
+    )
+
+    stale_time = (
+        datetime.now(timezone.utc)
+        - timedelta(minutes=5)
+    ).isoformat()
+
+    with registry._connect() as connection:
+        connection.execute(
+            """
+            UPDATE workers
+            SET last_heartbeat = ?
+            WHERE worker_id = ?
+            """,
+            (
+                stale_time,
+                worker.worker_id,
+            ),
+        )
+        connection.commit()
+
+    assert registry.is_stale(
+        worker.worker_id,
+        stale_after_seconds=30,
+    ) is True
+
+
+def test_is_stale_returns_false_for_healthy_worker(
+    tmp_path,
+):
+    registry = WorkerRegistry(
+        tmp_path / "test.db"
+    )
+
+    worker = registry.register(
+        worker_id="worker-1",
+        concurrency=4,
+    )
+
+    assert registry.is_stale(
+        worker.worker_id,
+        stale_after_seconds=30,
+    ) is False

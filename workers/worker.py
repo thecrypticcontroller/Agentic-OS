@@ -62,10 +62,24 @@ WORKER_CONCURRENCY = max(
 def available_claim_slots(
     available_slots: int,
     runtime_control: RuntimeControl,
+    worker_registry: WorkerRegistry | None = None,
+    worker_id: str | None = None,
 ) -> int:
     """Return the number of queued jobs the worker may claim."""
     if runtime_control.is_queue_paused():
         return 0
+
+    if worker_registry is not None or worker_id is not None:
+        if worker_registry is None or worker_id is None:
+            return 0
+
+        worker = worker_registry.get(worker_id)
+
+        if worker is None:
+            return 0
+
+        if worker.status != "running":
+            return 0
 
     return max(
         0,
@@ -309,6 +323,8 @@ def worker_loop() -> None:
                 claim_slots = available_claim_slots(
                     available_slots,
                     runtime_control,
+                    worker_registry,
+                    worker_id,
                 )
 
                 for _ in range(
@@ -340,6 +356,20 @@ def worker_loop() -> None:
                     futures[future] = (
                         record.run_id
                     )
+
+                current_worker = worker_registry.get(
+                    worker_id
+                )
+
+                if (
+                    current_worker is not None
+                    and current_worker.status == "draining"
+                    and not futures
+                ):
+                    worker_registry.stop(
+                        worker_id
+                    )
+                    break
 
                 if not futures:
                     time.sleep(

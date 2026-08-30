@@ -143,8 +143,7 @@ class WorkerRegistry:
                 """
                 UPDATE workers
                 SET last_heartbeat = ?,
-                    active_runs = ?,
-                    status = 'running'
+                    active_runs = ?
                 WHERE worker_id = ?
                 """,
                 (
@@ -152,6 +151,25 @@ class WorkerRegistry:
                     active_runs,
                     worker_id,
                 ),
+            )
+
+            connection.commit()
+
+        return updated.rowcount == 1
+
+    def drain(
+        self,
+        worker_id: str,
+    ) -> bool:
+        with self._connect() as connection:
+            updated = connection.execute(
+                """
+                UPDATE workers
+                SET status = 'draining'
+                WHERE worker_id = ?
+                  AND status = 'running'
+                """,
+                (worker_id,),
             )
 
             connection.commit()
@@ -221,6 +239,37 @@ class WorkerRegistry:
             for row in rows
         ]
 
+    def is_stale(
+        self,
+        worker_id: str,
+        *,
+        stale_after_seconds: int = 90,
+    ) -> bool:
+        if stale_after_seconds < 1:
+            raise ValueError(
+                "stale_after_seconds must be at least 1"
+            )
+
+        worker = self.get(worker_id)
+
+        if worker is None:
+            return False
+
+        try:
+            last_heartbeat = datetime.fromisoformat(
+                worker.last_heartbeat
+            )
+        except ValueError:
+            return True
+
+        return (
+            datetime.now(timezone.utc)
+            - last_heartbeat
+            > timedelta(
+                seconds=stale_after_seconds
+            )
+        )
+
     def snapshot(
         self,
         *,
@@ -276,7 +325,7 @@ class WorkerRegistry:
         healthy = sum(
             1
             for worker in normalized
-            if worker["status"] == "running"
+            if worker["status"] in {"running", "draining"}
         )
 
         active_runs = sum(

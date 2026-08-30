@@ -252,6 +252,65 @@ def resume_runtime_queue() -> dict[str, Any]:
     }
 
 
+@app.post("/v1/runtime/workers/{worker_id}/drain")
+def drain_runtime_worker(
+    worker_id: str,
+) -> dict[str, Any]:
+    worker = worker_registry.get(worker_id)
+
+    if worker is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Worker not found: {worker_id}",
+        )
+
+    if worker.status == "stopped":
+        raise HTTPException(
+            status_code=409,
+            detail=f"Worker is already stopped: {worker_id}",
+        )
+
+    if (
+        worker.status == "stale"
+        or worker_registry.is_stale(worker_id)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Worker is stale: {worker_id}",
+        )
+
+    if worker.status == "draining":
+        return {
+            "service": "agent-os",
+            "status": "ok",
+            "worker": {
+                "worker_id": worker_id,
+                "status": "draining",
+                "active_runs": worker.active_runs,
+            },
+        }
+
+    changed = worker_registry.drain(worker_id)
+
+    if not changed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Worker could not be drained: {worker_id}",
+        )
+
+    updated = worker_registry.get(worker_id)
+
+    return {
+        "service": "agent-os",
+        "status": "ok",
+        "worker": {
+            "worker_id": worker_id,
+            "status": updated.status if updated else "draining",
+            "active_runs": updated.active_runs if updated else worker.active_runs,
+        },
+    }
+
+
 @app.post("/v1/runs/{run_id}/retry")
 def retry_run(run_id: str) -> dict[str, Any]:
     try:

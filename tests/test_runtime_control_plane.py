@@ -427,3 +427,152 @@ def test_runtime_reports_worker_snapshot(
     assert worker_payload["active_runs"] == 2
     assert worker_payload["configured_concurrency"] == 4
     assert worker_payload["workers"][0]["worker_id"] == "worker-1"
+
+
+def test_drain_worker_endpoint(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    workers = WorkerRegistry(
+        tmp_path / "runtime.db"
+    )
+
+    worker = workers.register(
+        worker_id="worker-1",
+        hostname="test-host",
+        pid=123,
+        concurrency=4,
+    )
+
+    monkeypatch.setattr(
+        app_module,
+        "worker_registry",
+        workers,
+    )
+
+    response = client.post(
+        f"/v1/runtime/workers/{worker.worker_id}/drain"
+    )
+
+    assert response.status_code == 200
+
+    payload = response.json()
+
+    assert payload["worker"]["worker_id"] == "worker-1"
+    assert payload["worker"]["status"] == "draining"
+
+    persisted = workers.get(
+        "worker-1"
+    )
+
+    assert persisted is not None
+    assert persisted.status == "draining"
+
+
+def test_drain_missing_worker_returns_404(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    workers = WorkerRegistry(
+        tmp_path / "runtime.db"
+    )
+
+    monkeypatch.setattr(
+        app_module,
+        "worker_registry",
+        workers,
+    )
+
+    response = client.post(
+        "/v1/runtime/workers/missing/drain"
+    )
+
+    assert response.status_code == 404
+
+
+def test_drain_already_draining_worker_is_idempotent(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    workers = WorkerRegistry(
+        tmp_path / "runtime.db"
+    )
+
+    worker = workers.register(
+        worker_id="worker-1",
+        concurrency=4,
+    )
+
+    workers.drain(
+        worker.worker_id
+    )
+
+    monkeypatch.setattr(
+        app_module,
+        "worker_registry",
+        workers,
+    )
+
+    response = client.post(
+        f"/v1/runtime/workers/{worker.worker_id}/drain"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["worker"]["status"] == "draining"
+
+
+def test_drain_stale_worker_returns_409(
+    tmp_path,
+    monkeypatch,
+):
+    from datetime import datetime, timedelta, timezone
+    from tools.worker_registry import WorkerRegistry
+
+    workers = WorkerRegistry(
+        tmp_path / "runtime.db"
+    )
+
+    worker = workers.register(
+        worker_id="worker-stale",
+        hostname="test-host",
+        pid=123,
+        concurrency=4,
+    )
+
+    stale_time = (
+        datetime.now(timezone.utc)
+        - timedelta(minutes=5)
+    ).isoformat()
+
+    with workers._connect() as connection:
+        connection.execute(
+            """
+            UPDATE workers
+            SET last_heartbeat = ?
+            WHERE worker_id = ?
+            """,
+            (
+                stale_time,
+                worker.worker_id,
+            ),
+        )
+        connection.commit()
+
+    monkeypatch.setattr(
+        app_module,
+        "worker_registry",
+        workers,
+    )
+
+    response = client.post(
+        f"/v1/runtime/workers/{worker.worker_id}/drain"
+    )
+
+    assert response.status_code == 409
+    assert "stale" in response.json()["detail"].lower()
