@@ -216,7 +216,7 @@ def test_plan_deep_research():
     assert plan.worker == "researcher"
     assert plan.research_mode == "deep"
     assert plan.target_url is None
-    assert plan.tool == "firecrawl.agent"
+    assert plan.tool == "free-first-deep-research"
 
 def test_deep_research_with_url_stays_deep():
     manager = Manager()
