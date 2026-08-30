@@ -21,6 +21,10 @@ from tools.retry_policy import RetryPolicy
 from tools.run_registry import RunRecord, RunRegistry
 
 
+# Compatibility seam retained for the existing manager tests and callers.
+deep_research = run_deep_research
+
+
 WorkerName = Literal["researcher", "browser_worker"]
 ResearchMode = Literal["normal", "deep"]
 JobStatus = Literal["queued", "running", "completed", "failed"]
@@ -425,7 +429,7 @@ class Manager:
                 )
 
             elif plan.research_mode == "deep":
-                deep = run_deep_research(
+                deep = deep_research(
                     job.objective
                 )
 
