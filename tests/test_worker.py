@@ -469,3 +469,52 @@ def test_worker_registry_tracks_active_runs(
     assert loaded is not None
     assert loaded.status == "running"
     assert loaded.active_runs == 3
+
+
+def test_worker_claim_slots_zero_when_worker_draining(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from tools.worker_registry import WorkerRegistry
+    from workers.worker import available_claim_slots
+
+    db = tmp_path / "runtime.db"
+
+    control = RuntimeControl(db)
+    registry = WorkerRegistry(db)
+
+    worker = registry.register(
+        worker_id="worker-drain",
+        concurrency=4,
+    )
+
+    registry.drain(
+        worker.worker_id
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        worker.worker_id,
+    ) == 0
+
+
+def test_worker_claim_slots_zero_when_worker_missing(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from tools.worker_registry import WorkerRegistry
+    from workers.worker import available_claim_slots
+
+    db = tmp_path / "runtime.db"
+
+    control = RuntimeControl(db)
+    registry = WorkerRegistry(db)
+
+    assert available_claim_slots(
+        4,
+        control,
+        registry,
+        "missing-worker",
+    ) == 0
