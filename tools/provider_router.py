@@ -3,27 +3,33 @@ Provider Router — free-first, reserve-only Firecrawl.
 
 Routing policy (from provider_registry):
   web_search:    brave -> tavily -> exa -> firecrawl(reserve)
-  web_extract:   jina  -> exa   -> firecrawl(reserve)
-  deep_research: tavily -> exa  -> firecrawl(reserve)
+  web_extract:  jina -> exa -> firecrawl(reserve)
+  deep_research: tavily -> exa -> firecrawl(reserve)
 
 Missing-key skip: a provider that requires an API key not present
 in the environment is skipped silently and recorded in ProviderAttempt.
-
 Runtime fallback: if a provider raises during execution the router
 catches the exception, records it, and continues to the next provider.
 
-Reserve protection: Firecrawl (or any reserve_only provider) is NEVER
-attempted unless allow_reserve=True is explicitly passed.
+Adaptive routing: when AGENT_OS_ADAPTIVE_ROUTING is explicitly enabled,
+observed provider health/cost rankings reorder only configured providers.
+Reserve-only providers remain excluded unless allow_reserve=True.
 """
 from __future__ import annotations
 
 import os
+import time
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import requests
 
+from tools.cost_control import CostController
+from tools.cost_intelligence import CostIntelligence
+from tools.provider_decision import ProviderDecisionEngine
+from tools.provider_health import ProviderHealthService
+from tools.provider_observability import ProviderObservability
 from tools.provider_registry import ProviderSpec, providers_for
 from tools.web_research import (
     WebPageResult,
@@ -33,10 +39,6 @@ from tools.web_research import (
     _firecrawl,
 )
 
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
 
 class ProviderUnavailableError(RuntimeError):
     """All providers were skipped or failed; includes structured diagnostics."""
@@ -62,22 +64,14 @@ class ProviderExecutionError(RuntimeError):
     """A provider was attempted but raised an exception."""
 
 
-# ---------------------------------------------------------------------------
-# Diagnostics
-# ---------------------------------------------------------------------------
-
 @dataclass
 class ProviderAttempt:
     provider: str
-    status: str          # "skipped" | "failed" | "success"
-    reason: str | None   # human-readable, NEVER contains key values
+    status: str
+    reason: str | None
 
 
-# ---------------------------------------------------------------------------
-# Adapter helpers
-# ---------------------------------------------------------------------------
-
-_TIMEOUT = 15  # seconds
+_TIMEOUT = 15
 
 
 def _env(key: str) -> str | None:
@@ -85,23 +79,15 @@ def _env(key: str) -> str | None:
     return os.getenv(key) or None
 
 
-def _brave_search(
-    query: str,
-    limit: int,
-    api_key: str,
-) -> list[WebSearchResult]:
+def _brave_search(query: str, limit: int, api_key: str) -> list[WebSearchResult]:
     resp = requests.get(
         "https://api.search.brave.com/res/v1/web/search",
-        headers={
-            "X-Subscription-Token": api_key,
-            "Accept": "application/json",
-        },
+        headers={"X-Subscription-Token": api_key, "Accept": "application/json"},
         params={"q": query, "count": limit},
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    data = resp.json()
-    items = (data.get("web") or {}).get("results") or []
+    items = (resp.json().get("web") or {}).get("results") or []
     return [
         WebSearchResult(
             url=item.get("url", ""),
@@ -113,11 +99,7 @@ def _brave_search(
     ]
 
 
-def _tavily_search(
-    query: str,
-    limit: int,
-    api_key: str,
-) -> list[WebSearchResult]:
+def _tavily_search(query: str, limit: int, api_key: str) -> list[WebSearchResult]:
     resp = requests.post(
         "https://api.tavily.com/search",
         json={
@@ -129,8 +111,7 @@ def _tavily_search(
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    data = resp.json()
-    items = data.get("results") or []
+    items = resp.json().get("results") or []
     return [
         WebSearchResult(
             url=item.get("url", ""),
@@ -142,11 +123,7 @@ def _tavily_search(
     ]
 
 
-def _exa_search(
-    query: str,
-    limit: int,
-    api_key: str,
-) -> list[WebSearchResult]:
+def _exa_search(query: str, limit: int, api_key: str) -> list[WebSearchResult]:
     resp = requests.post(
         "https://api.exa.ai/search",
         headers={"x-api-key": api_key},
@@ -154,8 +131,7 @@ def _exa_search(
         timeout=_TIMEOUT,
     )
     resp.raise_for_status()
-    data = resp.json()
-    items = data.get("results") or []
+    items = resp.json().get("results") or []
     return [
         WebSearchResult(
             url=item.get("url", ""),
@@ -167,10 +143,7 @@ def _exa_search(
     ]
 
 
-def _firecrawl_search(
-    query: str,
-    limit: int,
-) -> list[WebSearchResult]:
+def _firecrawl_search(query: str, limit: int) -> list[WebSearchResult]:
     """Delegate to existing Firecrawl integration (reserve-only)."""
     app = _firecrawl()
     if app is None:
@@ -187,10 +160,7 @@ def _firecrawl_search(
     ]
 
 
-def _jina_extract(
-    url: str,
-    max_chars: int,
-) -> WebPageResult:
+def _jina_extract(url: str, max_chars: int) -> WebPageResult:
     """Jina Reader — no API key required."""
     encoded = urllib.parse.quote(url, safe="")
     resp = requests.get(
@@ -200,26 +170,17 @@ def _jina_extract(
     )
     resp.raise_for_status()
     raw = resp.text or ""
-    # Parse title from first line if formatted as "Title: ..."
     title = url
     lines = raw.splitlines()
     if lines and lines[0].lower().startswith("title:"):
         title = lines[0][6:].strip() or url
     markdown = _clean_markdown(raw, max_chars)
     if not _is_quality_content(title, markdown):
-        raise ProviderExecutionError(
-            f"Jina returned low-quality content for {url}"
-        )
+        raise ProviderExecutionError(f"Jina returned low-quality content for {url}")
     return WebPageResult(url=url, title=title, markdown=markdown, source="jina")
 
 
-def _firecrawl_extract(
-    url: str,
-    max_chars: int,
-) -> WebPageResult:
-    """Delegate to low-level Firecrawl scrape (reserve-only).
-    Calls _scrape_firecrawl directly to avoid routing back through scrape_web
-    (which would re-enter the router with allow_reserve=False and never reach here)."""
+def _firecrawl_extract(url: str, max_chars: int) -> WebPageResult:
     from tools.web_research import _scrape_firecrawl
     try:
         return _scrape_firecrawl(url, max_chars)
@@ -227,11 +188,6 @@ def _firecrawl_extract(
         raise ProviderExecutionError(str(exc)) from exc
 
 
-# ---------------------------------------------------------------------------
-# Provider-level dispatch tables
-# ---------------------------------------------------------------------------
-
-# Maps provider name -> callable(query, limit, api_key?) -> results
 _SEARCH_ADAPTERS: dict[str, Any] = {
     "brave": lambda q, n, key: _brave_search(q, n, key),
     "tavily": lambda q, n, key: _tavily_search(q, n, key),
@@ -242,189 +198,176 @@ _SEARCH_ADAPTERS: dict[str, Any] = {
 _EXTRACT_ADAPTERS: dict[str, Any] = {
     "jina": lambda url, chars, _key: _jina_extract(url, chars),
     "firecrawl": lambda url, chars, _key: _firecrawl_extract(url, chars),
-    # exa extraction not implemented via direct REST; skip cleanly
 }
 
 
-# ---------------------------------------------------------------------------
-# Router
-# ---------------------------------------------------------------------------
-
 class ProviderRouter:
-    """
-    Routes requests through the free-first provider chain.
+    """Free-first router with optional health/cost-aware provider ordering."""
 
-    Firecrawl (reserve_only=True) is NEVER attempted unless
-    allow_reserve=True is explicitly passed.
-    """
-
-    def _ordered_specs(
+    def __init__(
         self,
-        capability: str,
-        allow_reserve: bool,
-    ) -> list[ProviderSpec]:
-        return providers_for(capability, include_reserve=allow_reserve)
+        observer: ProviderObservability | None = None,
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        self.observer = observer or ProviderObservability()
+        self.run_id = run_id
+        self._adaptive_enabled = (
+            os.getenv("AGENT_OS_ADAPTIVE_ROUTING", "false")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"}
+        )
+
+    def _ordered_specs(self, capability: str, allow_reserve: bool) -> list[ProviderSpec]:
+        specs = providers_for(capability, include_reserve=allow_reserve)
+        if not self._adaptive_enabled or not specs:
+            return specs
+
+        try:
+            health = ProviderHealthService(self.observer)
+            cost = CostIntelligence(self.observer, CostController(self.observer.db_path))
+            decisions = ProviderDecisionEngine(health, cost).rank(
+                capability,
+                allow_reserve=allow_reserve,
+            )
+            rank = {decision.provider: index for index, decision in enumerate(decisions)}
+
+            configured = [spec for spec in specs if self._key_for(spec) is not None]
+            unavailable = [spec for spec in specs if self._key_for(spec) is None]
+            configured.sort(
+                key=lambda spec: (
+                    rank.get(spec.name, len(rank)),
+                    spec.priority,
+                    spec.name,
+                )
+            )
+            return configured + unavailable
+        except Exception:
+            return specs
 
     def _key_for(self, spec: ProviderSpec) -> str | None:
         if not spec.requires_api_key:
-            return ""          # sentinel: key not needed
+            return ""
         if spec.env_key is None:
             return None
-        return _env(spec.env_key)  # None means missing
+        return _env(spec.env_key)
 
-    def search(
+    def _record(
         self,
-        query: str,
-        limit: int = 5,
-        allow_reserve: bool = False,
-    ) -> list[WebSearchResult]:
-        attempts: list[ProviderAttempt] = []
+        *,
+        provider: str,
+        operation: str,
+        status: str,
+        started: float,
+        reason: str | None = None,
+    ) -> None:
+        try:
+            self.observer.record(
+                provider=provider,
+                operation=operation,
+                status=status,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                run_id=self.run_id,
+                error_type="ProviderExecutionError" if status == "failed" else None,
+                error=reason if status == "failed" else None,
+            )
+        except Exception:
+            pass
 
+    def search(self, query: str, limit: int = 5, allow_reserve: bool = False) -> list[WebSearchResult]:
+        attempts: list[ProviderAttempt] = []
         for spec in self._ordered_specs("web_search", allow_reserve):
+            started = time.perf_counter()
             adapter = _SEARCH_ADAPTERS.get(spec.name)
             if adapter is None:
-                # No adapter implemented; skip cleanly
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="skipped",
-                    reason="no adapter implemented",
-                ))
+                reason = "no adapter implemented"
+                attempts.append(ProviderAttempt(spec.name, "skipped", reason))
+                self._record(provider=spec.name, operation="search", status="skipped", started=started, reason=reason)
                 continue
-
             key = self._key_for(spec)
             if key is None:
-                # Missing env key — skip, do not attempt
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="skipped",
-                    reason=f"{spec.env_key} is not configured",
-                ))
+                reason = f"{spec.env_key} is not configured"
+                attempts.append(ProviderAttempt(spec.name, "skipped", reason))
+                self._record(provider=spec.name, operation="search", status="skipped", started=started)
                 continue
-
             try:
                 results = adapter(query, limit, key)
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="success",
-                    reason=None,
-                ))
+                attempts.append(ProviderAttempt(spec.name, "success", None))
+                self._record(provider=spec.name, operation="search", status="success", started=started)
                 return results
             except Exception as exc:
-                # Runtime failure — record and fall through to next provider
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="failed",
-                    reason=_safe_reason(exc),
-                ))
-
+                reason = _safe_reason(exc)
+                attempts.append(ProviderAttempt(spec.name, "failed", reason))
+                self._record(provider=spec.name, operation="search", status="failed", started=started, reason=reason)
         raise ProviderUnavailableError("web_search", attempts)
 
-    def extract(
-        self,
-        url: str,
-        max_chars: int = 4000,
-        allow_reserve: bool = False,
-    ) -> WebPageResult:
+    def extract(self, url: str, max_chars: int = 4000, allow_reserve: bool = False) -> WebPageResult:
         attempts: list[ProviderAttempt] = []
-
         for spec in self._ordered_specs("web_extract", allow_reserve):
+            started = time.perf_counter()
             adapter = _EXTRACT_ADAPTERS.get(spec.name)
             if adapter is None:
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="skipped",
-                    reason="no adapter implemented",
-                ))
+                reason = "no adapter implemented"
+                attempts.append(ProviderAttempt(spec.name, "skipped", reason))
+                self._record(provider=spec.name, operation="extract", status="skipped", started=started, reason=reason)
                 continue
-
             key = self._key_for(spec)
             if key is None:
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="skipped",
-                    reason=f"{spec.env_key} is not configured",
-                ))
+                reason = f"{spec.env_key} is not configured"
+                attempts.append(ProviderAttempt(spec.name, "skipped", reason))
+                self._record(provider=spec.name, operation="extract", status="skipped", started=started)
                 continue
-
             try:
                 result = adapter(url, max_chars, key)
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="success",
-                    reason=None,
-                ))
+                attempts.append(ProviderAttempt(spec.name, "success", None))
+                self._record(provider=spec.name, operation="extract", status="success", started=started)
                 return result
             except Exception as exc:
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="failed",
-                    reason=_safe_reason(exc),
-                ))
-
+                reason = _safe_reason(exc)
+                attempts.append(ProviderAttempt(spec.name, "failed", reason))
+                self._record(provider=spec.name, operation="extract", status="failed", started=started, reason=reason)
         raise ProviderUnavailableError("web_extract", attempts)
 
-    def deep_research(
-        self,
-        prompt: str,
-        allow_reserve: bool = False,
-    ) -> Any:
-        """
-        Deep research routing.  Currently Firecrawl is the only adapter
-        with full agent-research capability.  Free-first providers (tavily,
-        exa) may support basic search; reserve is Firecrawl agent.
-        """
+    def deep_research(self, prompt: str, allow_reserve: bool = False) -> Any:
         attempts: list[ProviderAttempt] = []
-
         for spec in self._ordered_specs("deep_research", allow_reserve):
+            started = time.perf_counter()
             if spec.name == "firecrawl":
-                # Firecrawl agent — reserve only
                 key = self._key_for(spec)
                 if key is None:
-                    attempts.append(ProviderAttempt(
-                        provider="firecrawl",
-                        status="skipped",
-                        reason="FIRECRAWL_API_KEY is not configured",
-                    ))
+                    reason = "FIRECRAWL_API_KEY is not configured"
+                    attempts.append(ProviderAttempt("firecrawl", "skipped", reason))
+                    self._record(provider="firecrawl", operation="deep_research", status="skipped", started=started)
                     continue
                 try:
                     app = _firecrawl()
                     if app is None:
                         raise ProviderExecutionError("key present but client failed")
                     result = app.agent(prompt=prompt)
-                    attempts.append(ProviderAttempt(
-                        provider="firecrawl",
-                        status="success",
-                        reason=None,
-                    ))
+                    attempts.append(ProviderAttempt("firecrawl", "success", None))
+                    self._record(provider="firecrawl", operation="deep_research", status="success", started=started)
                     return result
                 except Exception as exc:
-                    attempts.append(ProviderAttempt(
-                        provider="firecrawl",
-                        status="failed",
-                        reason=_safe_reason(exc),
-                    ))
+                    reason = _safe_reason(exc)
+                    attempts.append(ProviderAttempt("firecrawl", "failed", reason))
+                    self._record(provider="firecrawl", operation="deep_research", status="failed", started=started, reason=reason)
             else:
-                # tavily/exa do not have a full agent endpoint; skip cleanly
-                attempts.append(ProviderAttempt(
-                    provider=spec.name,
-                    status="skipped",
-                    reason="no deep-research agent adapter implemented",
-                ))
-
+                reason = "no deep-research agent adapter implemented"
+                attempts.append(ProviderAttempt(spec.name, "skipped", reason))
+                self._record(provider=spec.name, operation="deep_research", status="skipped", started=started, reason=reason)
         raise ProviderUnavailableError("deep_research", attempts)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def _safe_reason(exc: Exception) -> str:
-    """
-    Convert exception to a diagnostic string that NEVER leaks API key values.
-    We redact anything that looks like a 32+ character alphanumeric token.
-    """
-    import re
-    raw = str(exc)
-    # Redact long hex/alphanum tokens (typical API key shapes)
-    sanitized = re.sub(r"[A-Za-z0-9_\-]{32,}", "[REDACTED]", raw)
-    return sanitized[:200]
+    """Convert an exception to a non-secret diagnostic string."""
+    reason = str(exc)
+    for key in (
+        os.getenv("BRAVE_API_KEY"),
+        os.getenv("TAVILY_API_KEY"),
+        os.getenv("EXA_API_KEY"),
+        os.getenv("FIRECRAWL_API_KEY"),
+    ):
+        if key:
+            reason = reason.replace(key, "[REDACTED]")
+    return reason[:200]
