@@ -395,6 +395,11 @@ class Manager:
             if existing is not None
             else None
         )
+        worker_id = (
+            existing.worker_id
+            if existing is not None
+            else None
+        )
 
         self.registry.save(
             RunRecord(
@@ -413,6 +418,7 @@ class Manager:
                 result=None,
                 error=None,
                 lease_until=lease_until,
+                worker_id=worker_id,
             )
         )
 
@@ -536,6 +542,7 @@ class Manager:
                         result=job.result,
                         error=job.error,
                         lease_until=None,
+                        worker_id=worker_id,
                     )
                 )
             finally:

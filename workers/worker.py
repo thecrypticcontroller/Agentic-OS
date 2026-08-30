@@ -308,6 +308,18 @@ def worker_loop() -> None:
                             flush=True,
                         )
 
+                    reconciled = (
+                        registry.reconcile_worker_active_runs(
+                            worker_id
+                        )
+                    )
+
+                    if reconciled is not None:
+                        worker_registry.heartbeat(
+                            worker_id,
+                            active_runs=reconciled,
+                        )
+
                     last_recovery = now
 
                 completed = []
