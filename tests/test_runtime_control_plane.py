@@ -576,3 +576,62 @@ def test_drain_stale_worker_returns_409(
 
     assert response.status_code == 409
     assert "stale" in response.json()["detail"].lower()
+
+
+def test_runtime_reports_worker_capacity(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    workers = WorkerRegistry(
+        tmp_path / "runtime.db"
+    )
+
+    running = workers.register(
+        worker_name="worker-running",
+        concurrency=4,
+    )
+
+    draining = workers.register(
+        worker_name="worker-draining",
+        concurrency=2,
+    )
+
+    workers.heartbeat(
+        running.worker_id,
+        active_runs=1,
+    )
+
+    workers.drain(
+        draining.worker_id
+    )
+
+    workers.heartbeat(
+        draining.worker_id,
+        active_runs=1,
+    )
+
+    monkeypatch.setattr(
+        app_module,
+        "worker_registry",
+        workers,
+    )
+
+    response = client.get(
+        "/v1/runtime"
+    )
+
+    assert response.status_code == 200
+
+    worker = response.json()["worker"]
+
+    assert worker["count"] == 2
+    assert worker["healthy"] == 2
+    assert worker["active_runs"] == 2
+
+    assert worker["total_capacity"] == 6
+    assert worker["healthy_capacity"] == 6
+    assert worker["running_capacity"] == 4
+    assert worker["draining_capacity"] == 2
+    assert worker["available_capacity"] == 3

@@ -406,16 +406,63 @@ class WorkerRegistry:
             if worker["status"] in {"running", "draining"}
         )
 
+        running_workers = [
+            worker
+            for worker in normalized
+            if worker["status"] == "running"
+        ]
+
+        draining_workers = [
+            worker
+            for worker in normalized
+            if worker["status"] == "draining"
+        ]
+
         active_runs = sum(
             int(worker["active_runs"])
             for worker in normalized
             if worker["status"] != "stopped"
         )
 
+        total_capacity = sum(
+            int(worker["concurrency"])
+            for worker in normalized
+        )
+
+        healthy_capacity = sum(
+            int(worker["concurrency"])
+            for worker in normalized
+            if worker["status"] in {"running", "draining"}
+        )
+
+        running_capacity = sum(
+            int(worker["concurrency"])
+            for worker in running_workers
+        )
+
+        draining_capacity = sum(
+            int(worker["concurrency"])
+            for worker in draining_workers
+        )
+
+        available_capacity = sum(
+            max(
+                0,
+                int(worker["concurrency"])
+                - int(worker["active_runs"]),
+            )
+            for worker in running_workers
+        )
+
         return {
             "count": len(normalized),
             "healthy": healthy,
             "active_runs": active_runs,
+            "total_capacity": total_capacity,
+            "healthy_capacity": healthy_capacity,
+            "running_capacity": running_capacity,
+            "draining_capacity": draining_capacity,
+            "available_capacity": available_capacity,
             "workers": normalized,
         }
 

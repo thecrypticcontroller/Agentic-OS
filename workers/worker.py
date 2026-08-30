@@ -70,25 +70,35 @@ def available_claim_slots(
     worker_registry: WorkerRegistry | None = None,
     worker_id: str | None = None,
 ) -> int:
-    """Return the number of queued jobs the worker may claim."""
+    """Return the number of new jobs this worker may claim."""
     if runtime_control.is_queue_paused():
         return 0
 
-    if worker_registry is not None or worker_id is not None:
-        if worker_registry is None or worker_id is None:
-            return 0
+    if worker_registry is None or worker_id is None:
+        return max(
+            0,
+            available_slots,
+        )
 
-        worker = worker_registry.get(worker_id)
+    worker = worker_registry.get(worker_id)
 
-        if worker is None:
-            return 0
+    if worker is None:
+        return 0
 
-        if worker.status != "running":
-            return 0
+    if worker.status != "running":
+        return 0
 
-    return max(
+    registry_available = max(
         0,
-        available_slots,
+        worker.concurrency - worker.active_runs,
+    )
+
+    return min(
+        max(
+            0,
+            available_slots,
+        ),
+        registry_available,
     )
 
 
@@ -321,6 +331,11 @@ def worker_loop() -> None:
                         run_id,
                     )
 
+                    worker_registry.heartbeat(
+                        worker_id,
+                        active_runs=len(futures),
+                    )
+
                 available_slots = (
                     WORKER_CONCURRENCY
                     - len(futures)
@@ -361,6 +376,11 @@ def worker_loop() -> None:
 
                     futures[future] = (
                         record.run_id
+                    )
+
+                    worker_registry.heartbeat(
+                        worker_id,
+                        active_runs=len(futures),
                     )
 
                 current_worker = worker_registry.get(
