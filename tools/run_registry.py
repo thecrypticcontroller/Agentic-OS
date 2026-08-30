@@ -29,6 +29,7 @@ class RunRecord:
     parent_run_id: str | None = None
     attempt: int = 1
     lease_until: str | None = None
+    worker_id: str | None = None
 
 
 class RunRegistry:
@@ -73,7 +74,8 @@ class RunRegistry:
                     duration_ms INTEGER,
                     result_json TEXT,
                     error TEXT,
-                    lease_until TEXT
+                    lease_until TEXT,
+                    worker_id TEXT
                 )
                 """
             )
@@ -109,6 +111,14 @@ class RunRegistry:
                     """
                 )
 
+            if "worker_id" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE runs
+                    ADD COLUMN worker_id TEXT
+                    """
+                )
+
             connection.commit()
 
     def save(
@@ -133,9 +143,10 @@ class RunRegistry:
                     duration_ms,
                     result_json,
                     error,
-                    lease_until
+                    lease_until,
+                    worker_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.run_id,
@@ -158,6 +169,7 @@ class RunRegistry:
                     else None,
                     record.error,
                     record.lease_until,
+                    record.worker_id,
                 ),
             )
 
@@ -342,12 +354,13 @@ class RunRegistry:
         finally:
             connection.close()
 
+
     def claim_next_queued_for_worker(
         self,
         worker_id: str,
         lease_seconds: int = 120,
     ) -> RunRecord | None:
-        """Atomically reserve one queued run against one worker's capacity."""
+        """Atomically claim one queued run against worker capacity."""
         if lease_seconds < 1:
             raise ValueError(
                 "lease_seconds must be at least 1"
@@ -377,13 +390,13 @@ class RunRegistry:
                 connection.rollback()
                 return None
 
-            worker_available = max(
+            available = max(
                 0,
                 int(worker["concurrency"])
                 - int(worker["active_runs"]),
             )
 
-            if worker_available < 1:
+            if available < 1:
                 connection.rollback()
                 return None
 
@@ -418,13 +431,15 @@ class RunRegistry:
                         started_at,
                         ?
                     ),
-                    lease_until = ?
+                    lease_until = ?,
+                    worker_id = ?
                 WHERE run_id = ?
                   AND status = 'queued'
                 """,
                 (
                     now.isoformat(),
                     lease_text,
+                    worker_id,
                     row["run_id"],
                 ),
             )
@@ -461,10 +476,11 @@ class RunRegistry:
                 (row["run_id"],),
             ).fetchone()
 
-            connection.commit()
-
             if claimed is None:
+                connection.rollback()
                 return None
+
+            connection.commit()
 
             return self._row_to_record(
                 claimed
@@ -477,17 +493,12 @@ class RunRegistry:
         finally:
             connection.close()
 
-    def claim_next_queued_for_worker(
+
+    def reconcile_worker_active_runs(
         self,
         worker_id: str,
-        lease_seconds: int = 120,
-    ) -> RunRecord | None:
-        """Atomically reserve one queued run against one worker's capacity."""
-        if lease_seconds < 1:
-            raise ValueError(
-                "lease_seconds must be at least 1"
-            )
-
+    ) -> int | None:
+        """Repair workers.active_runs from authoritative running runs."""
         connection = self._connect()
 
         try:
@@ -495,115 +506,54 @@ class RunRegistry:
                 "BEGIN IMMEDIATE"
             )
 
-            worker = connection.execute(
-                """
-                SELECT *
-                FROM workers
-                WHERE worker_id = ?
-                """,
-                (worker_id,),
-            ).fetchone()
+            try:
+                worker = connection.execute(
+                    """
+                    SELECT worker_id
+                    FROM workers
+                    WHERE worker_id = ?
+                    """,
+                    (worker_id,),
+                ).fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table: workers" in str(exc).lower():
+                    connection.rollback()
+                    return None
+                raise
 
             if worker is None:
                 connection.rollback()
                 return None
 
-            if worker["status"] != "running":
-                connection.rollback()
-                return None
-
-            worker_available = max(
-                0,
-                int(worker["concurrency"])
-                - int(worker["active_runs"]),
-            )
-
-            if worker_available < 1:
-                connection.rollback()
-                return None
-
             row = connection.execute(
                 """
-                SELECT *
+                SELECT COUNT(*) AS count
                 FROM runs
-                WHERE status = 'queued'
-                ORDER BY rowid ASC
-                LIMIT 1
-                """
+                WHERE status = 'running'
+                  AND worker_id = ?
+                """,
+                (worker_id,),
             ).fetchone()
 
-            if row is None:
-                connection.rollback()
-                return None
-
-            now = datetime.now(
-                timezone.utc
+            active_runs = int(
+                row["count"]
             )
 
-            lease_text = datetime.fromtimestamp(
-                now.timestamp() + lease_seconds,
-                timezone.utc,
-            ).isoformat()
-
-            updated = connection.execute(
-                """
-                UPDATE runs
-                SET status = 'running',
-                    started_at = COALESCE(
-                        started_at,
-                        ?
-                    ),
-                    lease_until = ?
-                WHERE run_id = ?
-                  AND status = 'queued'
-                """,
-                (
-                    now.isoformat(),
-                    lease_text,
-                    row["run_id"],
-                ),
-            )
-
-            if updated.rowcount != 1:
-                connection.rollback()
-                return None
-
-            worker_updated = connection.execute(
+            connection.execute(
                 """
                 UPDATE workers
-                SET active_runs = active_runs + 1,
-                    last_heartbeat = ?
+                SET active_runs = ?
                 WHERE worker_id = ?
-                  AND status = 'running'
-                  AND active_runs < concurrency
                 """,
                 (
-                    now.isoformat(),
+                    active_runs,
                     worker_id,
                 ),
             )
 
-            if worker_updated.rowcount != 1:
-                connection.rollback()
-                return None
-
-            claimed = connection.execute(
-                """
-                SELECT *
-                FROM runs
-                WHERE run_id = ?
-                """,
-                (row["run_id"],),
-            ).fetchone()
-
             connection.commit()
 
-            if claimed is None:
-                return None
-
-            return self._row_to_record(
-                claimed
-            )
+            return active_runs
 
         except Exception:
             connection.rollback()
@@ -662,7 +612,8 @@ class RunRegistry:
                     completed_at = NULL,
                     duration_ms = NULL,
                     result_json = NULL,
-                    error = 'Recovered stale running job.'
+                    error = 'Recovered stale running job.',
+                    worker_id = NULL
                 WHERE status = 'running'
                   AND (
                       lease_until IS NULL
@@ -757,6 +708,11 @@ class RunRegistry:
             result=result,
             error=row["error"],
             lease_until=row["lease_until"],
+            worker_id=(
+                row["worker_id"]
+                if "worker_id" in row.keys()
+                else None
+            ),
         )
 
     def dump(

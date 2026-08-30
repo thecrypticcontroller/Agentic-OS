@@ -537,3 +537,178 @@ def test_concurrent_workers_cannot_overclaim_capacity(
             limit=10,
         )
     ) == 0
+
+
+def test_atomic_claim_records_worker_owner(
+    tmp_path,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    db = tmp_path / "test.db"
+
+    registry = RunRegistry(db)
+    workers = WorkerRegistry(db)
+
+    worker = workers.register(
+        worker_id="worker-owner",
+        concurrency=2,
+    )
+
+    registry.save(
+        RunRecord(
+            run_id="run-owner",
+            objective="Owned run",
+            worker="researcher",
+            research_mode="normal",
+            target_url=None,
+            tool="test",
+            status="queued",
+            started_at=None,
+            completed_at=None,
+            duration_ms=None,
+            result=None,
+            error=None,
+        )
+    )
+
+    claimed = registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    assert claimed is not None
+    assert claimed.worker_id == worker.worker_id
+
+    loaded = registry.get(
+        "run-owner"
+    )
+
+    assert loaded is not None
+    assert loaded.worker_id == worker.worker_id
+
+
+def test_reconcile_worker_active_runs_repairs_counter(
+    tmp_path,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    db = tmp_path / "test.db"
+
+    registry = RunRegistry(db)
+    workers = WorkerRegistry(db)
+
+    worker = workers.register(
+        worker_id="worker-reconcile",
+        concurrency=4,
+    )
+
+    for run_id in ("run-a", "run-b"):
+        registry.save(
+            RunRecord(
+                run_id=run_id,
+                objective="Running job",
+                worker="researcher",
+                research_mode="normal",
+                target_url=None,
+                tool="test",
+                status="queued",
+                started_at=None,
+                completed_at=None,
+                duration_ms=None,
+                result=None,
+                error=None,
+            )
+        )
+
+    registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+    registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    with workers._connect() as connection:
+        connection.execute(
+            """
+            UPDATE workers
+            SET active_runs = 0
+            WHERE worker_id = ?
+            """,
+            (worker.worker_id,),
+        )
+        connection.commit()
+
+    assert workers.get(
+        worker.worker_id
+    ).active_runs == 0
+
+    reconciled = registry.reconcile_worker_active_runs(
+        worker.worker_id
+    )
+
+    assert reconciled == 2
+
+    loaded = workers.get(
+        worker.worker_id
+    )
+
+    assert loaded is not None
+    assert loaded.active_runs == 2
+
+
+def test_reconcile_ignores_completed_runs(
+    tmp_path,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    db = tmp_path / "test.db"
+
+    registry = RunRegistry(db)
+    workers = WorkerRegistry(db)
+
+    worker = workers.register(
+        worker_id="worker-completed",
+        concurrency=4,
+    )
+
+    registry.save(
+        RunRecord(
+            run_id="run-completed",
+            objective="Completed job",
+            worker="researcher",
+            research_mode="normal",
+            target_url=None,
+            tool="test",
+            status="completed",
+            started_at=None,
+            completed_at=None,
+            duration_ms=10,
+            result={"ok": True},
+            error=None,
+            worker_id=worker.worker_id,
+        )
+    )
+
+    reconciled = registry.reconcile_worker_active_runs(
+        worker.worker_id
+    )
+
+    assert reconciled == 0
+
+    loaded = workers.get(
+        worker.worker_id
+    )
+
+    assert loaded is not None
+    assert loaded.active_runs == 0
+
+
+def test_reconcile_missing_worker_returns_none(
+    tmp_path,
+):
+    registry = RunRegistry(
+        tmp_path / "test.db"
+    )
+
+    assert registry.reconcile_worker_active_runs(
+        "missing-worker"
+    ) is None
