@@ -9,6 +9,8 @@ from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from agents.manager import Manager
+from tools.provider_observability import ProviderObservability
+from tools.provider_registry import PROVIDERS
 from tools.run_registry import RunRegistry
 
 
@@ -30,6 +32,9 @@ registry = RunRegistry(
     PROJECT_ROOT / "agent_os.db"
 )
 
+observability = ProviderObservability(
+    PROJECT_ROOT / "agent_os.db"
+)
 
 manager = Manager(
     registry=registry
@@ -184,6 +189,64 @@ def get_run(
     return asdict(
         record
     )
+
+
+@app.get("/v1/runs/{run_id}/observability")
+def get_run_observability(
+    run_id: str,
+    limit: int = Query(
+        default=100,
+        ge=1,
+        le=500,
+    ),
+) -> dict[str, Any]:
+    if registry.get(run_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Run not found: {run_id}",
+        )
+
+    events = observability.recent(
+        limit=limit,
+        run_id=run_id,
+    )
+
+    return {
+        "run_id": run_id,
+        "summary": observability.summary(
+            run_id=run_id
+        ),
+        "events": [
+            observability.to_dict(event)
+            for event in reversed(events)
+        ],
+    }
+
+
+@app.get("/v1/observability/providers")
+def provider_observability() -> dict[str, Any]:
+    providers = []
+
+    for spec in PROVIDERS:
+        summary = observability.summary(
+            provider=spec.name
+        )
+        providers.append(
+            {
+                "provider": spec.name,
+                "capabilities": list(spec.capabilities),
+                "free_first": spec.free_first,
+                "priority": spec.priority,
+                "reserve_only": spec.reserve_only,
+                "requires_api_key": spec.requires_api_key,
+                "summary": summary,
+            }
+        )
+
+    return {
+        "count": len(providers),
+        "providers": providers,
+    }
 
 
 @app.post("/v1/runs/{run_id}/retry")
