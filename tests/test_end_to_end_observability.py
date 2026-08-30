@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest import mock
 
 from agents.manager import Manager
 from tools.provider_observability import ProviderObservability
@@ -34,7 +35,8 @@ def test_manager_run_produces_correlated_provider_trace(monkeypatch, tmp_path):
 
     monkeypatch.setattr("agents.manager.research", fake_research)
     monkeypatch.setattr("agents.manager.synthesize", fake_synthesize)
-    monkeypatch.setattr(
+
+    with mock.patch(
         "tools.provider_router._brave_search",
         return_value=[
             SimpleNamespace(
@@ -44,11 +46,10 @@ def test_manager_run_produces_correlated_provider_trace(monkeypatch, tmp_path):
                 position=1,
             )
         ],
-    )
-
-    manager = Manager(registry=registry)
-    job = manager.create_job("research observability integration")
-    result = manager.execute(job)
+    ):
+        manager = Manager(registry=registry)
+        job = manager.create_job("research observability integration")
+        result = manager.execute(job)
 
     assert result.status == "completed"
     assert result.id == job.id
