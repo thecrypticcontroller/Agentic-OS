@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -11,11 +11,11 @@ from typing import Literal
 
 from agents.browser_worker import open_and_inspect
 from agents.researcher import (
-    deep_research,
     research,
     research_url,
 )
 from agents.synthesizer import synthesize
+from tools.deep_research import run_deep_research
 from tools.error_classifier import classify_error
 from tools.retry_policy import RetryPolicy
 from tools.run_registry import RunRecord, RunRegistry
@@ -190,7 +190,7 @@ class Manager:
 
         if match:
             return match.group(0).rstrip(
-                ".,);"
+                ".,);\""
             )
 
         return None
@@ -210,7 +210,7 @@ class Manager:
         if worker == "browser_worker":
             tool = "browser_harness"
         elif job.research_mode == "deep":
-            tool = "firecrawl.agent"
+            tool = "free-first-deep-research"
         elif target_url:
             tool = "firecrawl.scrape"
         else:
@@ -325,7 +325,7 @@ class Manager:
                 "browser_harness"
                 if job.worker == "browser_worker"
                 else (
-                    "firecrawl.agent"
+                    "free-first-deep-research"
                     if job.research_mode == "deep"
                     else (
                         "firecrawl.scrape"
@@ -361,7 +361,7 @@ class Manager:
                 worker=job.worker,
                 research_mode=job.research_mode,
                 target_url=job.target_url,
-                tool="firecrawl.agent",
+                tool="free-first-deep-research",
             )
         elif job.target_url:
             plan = ExecutionPlan(
@@ -425,7 +425,7 @@ class Manager:
                 )
 
             elif plan.research_mode == "deep":
-                deep = deep_research(
+                deep = run_deep_research(
                     job.objective
                 )
 
