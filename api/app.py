@@ -9,6 +9,8 @@ from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from agents.manager import Manager
+from tools.cost_control import CostController
+from tools.cost_intelligence import CostIntelligence
 from tools.provider_health import ProviderHealthService
 from tools.provider_observability import ProviderObservability
 from tools.provider_registry import PROVIDERS
@@ -39,6 +41,15 @@ observability = ProviderObservability(
 
 health_service = ProviderHealthService(
     observability
+)
+
+cost_controller = CostController(
+    PROJECT_ROOT / "agent_os.db"
+)
+
+cost_intelligence = CostIntelligence(
+    observability,
+    cost_controller,
 )
 
 manager = Manager(
@@ -228,6 +239,21 @@ def get_run_observability(
     }
 
 
+@app.get("/v1/runs/{run_id}/cost")
+def get_run_cost(
+    run_id: str,
+) -> dict[str, Any]:
+    if registry.get(run_id) is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Run not found: {run_id}",
+        )
+
+    return cost_intelligence.run_snapshot(
+        run_id
+    ).to_dict()
+
+
 @app.get("/v1/observability/providers")
 def provider_observability() -> dict[str, Any]:
     providers = []
@@ -237,6 +263,9 @@ def provider_observability() -> dict[str, Any]:
             provider=spec.name
         )
         health_snapshot = health_service.snapshot(
+            spec.name
+        )
+        cost_snapshot = cost_intelligence.provider_snapshot(
             spec.name
         )
         providers.append(
@@ -249,6 +278,7 @@ def provider_observability() -> dict[str, Any]:
                 "requires_api_key": spec.requires_api_key,
                 "summary": summary,
                 "health": health_snapshot.to_dict(),
+                "cost": cost_snapshot.to_dict(),
             }
         )
 
