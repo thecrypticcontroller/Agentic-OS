@@ -18,12 +18,14 @@ attempted unless allow_reserve=True is explicitly passed.
 from __future__ import annotations
 
 import os
+import time
 import urllib.parse
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import requests
 
+from tools.provider_observability import ProviderObservability
 from tools.provider_registry import ProviderSpec, providers_for
 from tools.web_research import (
     WebPageResult,
@@ -258,6 +260,15 @@ class ProviderRouter:
     allow_reserve=True is explicitly passed.
     """
 
+    def __init__(
+        self,
+        observer: ProviderObservability | None = None,
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        self.observer = observer or ProviderObservability()
+        self.run_id = run_id
+
     def _ordered_specs(
         self,
         capability: str,
@@ -272,6 +283,29 @@ class ProviderRouter:
             return None
         return _env(spec.env_key)  # None means missing
 
+    def _record(
+        self,
+        *,
+        provider: str,
+        operation: str,
+        status: str,
+        started: float,
+        reason: str | None = None,
+    ) -> None:
+        """Telemetry is best-effort and must never break routing."""
+        try:
+            self.observer.record(
+                provider=provider,
+                operation=operation,
+                status=status,
+                latency_ms=int((time.perf_counter() - started) * 1000),
+                run_id=self.run_id,
+                error_type=("ProviderExecutionError" if status == "failed" else None),
+                error=reason if status == "failed" else None,
+            )
+        except Exception:
+            pass
+
     def search(
         self,
         query: str,
@@ -281,24 +315,37 @@ class ProviderRouter:
         attempts: list[ProviderAttempt] = []
 
         for spec in self._ordered_specs("web_search", allow_reserve):
+            started = time.perf_counter()
             adapter = _SEARCH_ADAPTERS.get(spec.name)
             if adapter is None:
-                # No adapter implemented; skip cleanly
                 attempts.append(ProviderAttempt(
                     provider=spec.name,
                     status="skipped",
                     reason="no adapter implemented",
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="search",
+                    status="skipped",
+                    started=started,
+                    reason="no adapter implemented",
+                )
                 continue
 
             key = self._key_for(spec)
             if key is None:
-                # Missing env key — skip, do not attempt
+                reason = f"{spec.env_key} is not configured"
                 attempts.append(ProviderAttempt(
                     provider=spec.name,
                     status="skipped",
-                    reason=f"{spec.env_key} is not configured",
+                    reason=reason,
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="search",
+                    status="skipped",
+                    started=started,
+                )
                 continue
 
             try:
@@ -308,14 +355,27 @@ class ProviderRouter:
                     status="success",
                     reason=None,
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="search",
+                    status="success",
+                    started=started,
+                )
                 return results
             except Exception as exc:
-                # Runtime failure — record and fall through to next provider
+                reason = _safe_reason(exc)
                 attempts.append(ProviderAttempt(
                     provider=spec.name,
                     status="failed",
-                    reason=_safe_reason(exc),
+                    reason=reason,
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="search",
+                    status="failed",
+                    started=started,
+                    reason=reason,
+                )
 
         raise ProviderUnavailableError("web_search", attempts)
 
@@ -328,6 +388,7 @@ class ProviderRouter:
         attempts: list[ProviderAttempt] = []
 
         for spec in self._ordered_specs("web_extract", allow_reserve):
+            started = time.perf_counter()
             adapter = _EXTRACT_ADAPTERS.get(spec.name)
             if adapter is None:
                 attempts.append(ProviderAttempt(
@@ -335,15 +396,29 @@ class ProviderRouter:
                     status="skipped",
                     reason="no adapter implemented",
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="extract",
+                    status="skipped",
+                    started=started,
+                    reason="no adapter implemented",
+                )
                 continue
 
             key = self._key_for(spec)
             if key is None:
+                reason = f"{spec.env_key} is not configured"
                 attempts.append(ProviderAttempt(
                     provider=spec.name,
                     status="skipped",
-                    reason=f"{spec.env_key} is not configured",
+                    reason=reason,
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="extract",
+                    status="skipped",
+                    started=started,
+                )
                 continue
 
             try:
@@ -353,13 +428,27 @@ class ProviderRouter:
                     status="success",
                     reason=None,
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="extract",
+                    status="success",
+                    started=started,
+                )
                 return result
             except Exception as exc:
+                reason = _safe_reason(exc)
                 attempts.append(ProviderAttempt(
                     provider=spec.name,
                     status="failed",
-                    reason=_safe_reason(exc),
+                    reason=reason,
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="extract",
+                    status="failed",
+                    started=started,
+                    reason=reason,
+                )
 
         raise ProviderUnavailableError("web_extract", attempts)
 
@@ -376,15 +465,23 @@ class ProviderRouter:
         attempts: list[ProviderAttempt] = []
 
         for spec in self._ordered_specs("deep_research", allow_reserve):
+            started = time.perf_counter()
             if spec.name == "firecrawl":
                 # Firecrawl agent — reserve only
                 key = self._key_for(spec)
                 if key is None:
+                    reason = "FIRECRAWL_API_KEY is not configured"
                     attempts.append(ProviderAttempt(
                         provider="firecrawl",
                         status="skipped",
-                        reason="FIRECRAWL_API_KEY is not configured",
+                        reason=reason,
                     ))
+                    self._record(
+                        provider="firecrawl",
+                        operation="deep_research",
+                        status="skipped",
+                        started=started,
+                    )
                     continue
                 try:
                     app = _firecrawl()
@@ -396,20 +493,42 @@ class ProviderRouter:
                         status="success",
                         reason=None,
                     ))
+                    self._record(
+                        provider="firecrawl",
+                        operation="deep_research",
+                        status="success",
+                        started=started,
+                    )
                     return result
                 except Exception as exc:
+                    reason = _safe_reason(exc)
                     attempts.append(ProviderAttempt(
                         provider="firecrawl",
                         status="failed",
-                        reason=_safe_reason(exc),
+                        reason=reason,
                     ))
+                    self._record(
+                        provider="firecrawl",
+                        operation="deep_research",
+                        status="failed",
+                        started=started,
+                        reason=reason,
+                    )
             else:
                 # tavily/exa do not have a full agent endpoint; skip cleanly
+                reason = "no deep-research agent adapter implemented"
                 attempts.append(ProviderAttempt(
                     provider=spec.name,
                     status="skipped",
-                    reason="no deep-research agent adapter implemented",
+                    reason=reason,
                 ))
+                self._record(
+                    provider=spec.name,
+                    operation="deep_research",
+                    status="skipped",
+                    started=started,
+                    reason=reason,
+                )
 
         raise ProviderUnavailableError("deep_research", attempts)
 
