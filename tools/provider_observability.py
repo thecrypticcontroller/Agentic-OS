@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from tools.run_context import current_run_id
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -135,9 +137,15 @@ class ProviderObservability:
                 + thinking_tokens
             )
 
+        effective_run_id = (
+            run_id
+            if run_id is not None
+            else current_run_id()
+        )
+
         event = ProviderEvent(
             event_id=str(uuid.uuid4()),
-            run_id=run_id,
+            run_id=effective_run_id,
             provider=provider,
             operation=operation,
             status=status,
