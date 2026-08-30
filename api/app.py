@@ -17,6 +17,7 @@ from tools.provider_health import ProviderHealthService
 from tools.provider_observability import ProviderObservability
 from tools.provider_registry import PROVIDERS
 from tools.run_registry import RunRegistry
+from tools.runtime_control import RuntimeControl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,7 @@ cost_controller = CostController(PROJECT_ROOT / "agent_os.db")
 cost_intelligence = CostIntelligence(observability, cost_controller)
 decision_engine = ProviderDecisionEngine(health_service, cost_intelligence)
 manager = Manager(registry=registry)
+runtime_control = RuntimeControl(PROJECT_ROOT / "agent_os.db")
 
 
 class CreateJobRequest(BaseModel):
@@ -214,8 +216,35 @@ def get_runtime() -> dict[str, Any]:
         "worker": {
             "configured_concurrency": concurrency,
         },
+        "queue": runtime_control.snapshot(),
         "routing": {
             "adaptive": adaptive,
+        },
+    }
+
+
+@app.post("/v1/runtime/queue/pause")
+def pause_runtime_queue() -> dict[str, Any]:
+    runtime_control.pause_queue()
+
+    return {
+        "service": "agent-os",
+        "status": "ok",
+        "queue": {
+            "paused": True,
+        },
+    }
+
+
+@app.post("/v1/runtime/queue/resume")
+def resume_runtime_queue() -> dict[str, Any]:
+    runtime_control.resume_queue()
+
+    return {
+        "service": "agent-os",
+        "status": "ok",
+        "queue": {
+            "paused": False,
         },
     }
 

@@ -306,3 +306,77 @@ class TestLifecycle:
         assert result.id == original_id
         persisted = registry.get(original_id)
         assert persisted.run_id == original_id
+
+
+def test_runtime_reports_queue_pause_state(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.runtime_control import RuntimeControl
+
+    control = RuntimeControl(
+        tmp_path / "runtime.db"
+    )
+
+    monkeypatch.setattr(
+        app_module,
+        "runtime_control",
+        control,
+    )
+
+    response = client.get("/v1/runtime")
+
+    assert response.status_code == 200
+    assert response.json()["queue"]["paused"] is False
+
+
+def test_pause_queue_endpoint(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.runtime_control import RuntimeControl
+
+    control = RuntimeControl(
+        tmp_path / "runtime.db"
+    )
+
+    monkeypatch.setattr(
+        app_module,
+        "runtime_control",
+        control,
+    )
+
+    response = client.post(
+        "/v1/runtime/queue/pause"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["queue"]["paused"] is True
+    assert control.is_queue_paused() is True
+
+
+def test_resume_queue_endpoint(
+    tmp_path,
+    monkeypatch,
+):
+    from tools.runtime_control import RuntimeControl
+
+    control = RuntimeControl(
+        tmp_path / "runtime.db"
+    )
+
+    control.pause_queue()
+
+    monkeypatch.setattr(
+        app_module,
+        "runtime_control",
+        control,
+    )
+
+    response = client.post(
+        "/v1/runtime/queue/resume"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["queue"]["paused"] is False
+    assert control.is_queue_paused() is False

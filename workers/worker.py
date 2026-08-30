@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 from agents.manager import Manager
 from tools.run_registry import RunRegistry
+from tools.runtime_control import RuntimeControl
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -55,6 +56,20 @@ WORKER_CONCURRENCY = max(
         )
     ),
 )
+
+
+def available_claim_slots(
+    available_slots: int,
+    runtime_control: RuntimeControl,
+) -> int:
+    """Return the number of queued jobs the worker may claim."""
+    if runtime_control.is_queue_paused():
+        return 0
+
+    return max(
+        0,
+        available_slots,
+    )
 
 
 def _heartbeat_loop(
@@ -193,6 +208,10 @@ def worker_loop() -> None:
         registry=registry
     )
 
+    runtime_control = RuntimeControl(
+        PROJECT_ROOT / "agent_os.db"
+    )
+
     print(
         "Agent OS concurrent worker started.",
         flush=True,
@@ -265,11 +284,13 @@ def worker_loop() -> None:
                     - len(futures)
                 )
 
+                claim_slots = available_claim_slots(
+                    available_slots,
+                    runtime_control,
+                )
+
                 for _ in range(
-                    max(
-                        0,
-                        available_slots,
-                    )
+                    claim_slots
                 ):
                     record = (
                         registry.claim_next_queued(

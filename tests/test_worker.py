@@ -402,3 +402,42 @@ def test_concurrent_executor_can_run_multiple_jobs(
 
     # Four 100ms jobs should overlap substantially.
     assert elapsed < 0.35
+
+
+def test_worker_claim_slots_zero_when_queue_paused(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from workers.worker import available_claim_slots
+
+    control = RuntimeControl(
+        tmp_path / "runtime.db"
+    )
+
+    control.pause_queue()
+
+    assert available_claim_slots(
+        4,
+        control,
+    ) == 0
+
+
+def test_worker_claim_slots_follow_available_capacity(
+    tmp_path,
+):
+    from tools.runtime_control import RuntimeControl
+    from workers.worker import available_claim_slots
+
+    control = RuntimeControl(
+        tmp_path / "runtime.db"
+    )
+
+    assert available_claim_slots(
+        4,
+        control,
+    ) == 4
+
+    assert available_claim_slots(
+        -1,
+        control,
+    ) == 0
