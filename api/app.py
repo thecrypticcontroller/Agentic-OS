@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from agents.manager import Manager
+from tools.provider_health import ProviderHealthService
 from tools.provider_observability import ProviderObservability
 from tools.provider_registry import PROVIDERS
 from tools.run_registry import RunRegistry
@@ -34,6 +35,10 @@ registry = RunRegistry(
 
 observability = ProviderObservability(
     PROJECT_ROOT / "agent_os.db"
+)
+
+health_service = ProviderHealthService(
+    observability
 )
 
 manager = Manager(
@@ -231,6 +236,9 @@ def provider_observability() -> dict[str, Any]:
         summary = observability.summary(
             provider=spec.name
         )
+        health_snapshot = health_service.snapshot(
+            spec.name
+        )
         providers.append(
             {
                 "provider": spec.name,
@@ -240,6 +248,7 @@ def provider_observability() -> dict[str, Any]:
                 "reserve_only": spec.reserve_only,
                 "requires_api_key": spec.requires_api_key,
                 "summary": summary,
+                "health": health_snapshot.to_dict(),
             }
         )
 
