@@ -18,6 +18,7 @@ from agents.synthesizer import synthesize
 from tools.deep_research import run_deep_research
 from tools.error_classifier import classify_error
 from tools.retry_policy import RetryPolicy
+from tools.run_context import reset_run_id, set_run_id
 from tools.run_registry import RunRecord, RunRegistry
 
 
@@ -416,6 +417,7 @@ class Manager:
         )
 
         started_perf = perf_counter()
+        context_token = set_run_id(job.id)
 
         try:
             if plan.worker == "browser_worker":
@@ -516,24 +518,27 @@ class Manager:
                 * 1000
             )
 
-            self.registry.save(
-                RunRecord(
-                    run_id=job.id,
-                    parent_run_id=job.parent_run_id,
-                    attempt=job.attempt,
-                    objective=job.objective,
-                    worker=job.worker,
-                    research_mode=job.research_mode,
-                    target_url=job.target_url,
-                    tool=plan.tool,
-                    status=job.status,
-                    started_at=job.started_at,
-                    completed_at=job.completed_at,
-                    duration_ms=duration_ms,
-                    result=job.result,
-                    error=job.error,
-                    lease_until=None,
+            try:
+                self.registry.save(
+                    RunRecord(
+                        run_id=job.id,
+                        parent_run_id=job.parent_run_id,
+                        attempt=job.attempt,
+                        objective=job.objective,
+                        worker=job.worker,
+                        research_mode=job.research_mode,
+                        target_url=job.target_url,
+                        tool=plan.tool,
+                        status=job.status,
+                        started_at=job.started_at,
+                        completed_at=job.completed_at,
+                        duration_ms=duration_ms,
+                        result=job.result,
+                        error=job.error,
+                        lease_until=None,
+                    )
                 )
-            )
+            finally:
+                reset_run_id(context_token)
 
         return job
