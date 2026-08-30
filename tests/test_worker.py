@@ -441,3 +441,31 @@ def test_worker_claim_slots_follow_available_capacity(
         -1,
         control,
     ) == 0
+
+
+def test_worker_registry_tracks_active_runs(
+    tmp_path,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    registry = WorkerRegistry(
+        tmp_path / "runtime.db"
+    )
+
+    worker = registry.register(
+        worker_id="worker-test",
+        concurrency=4,
+    )
+
+    registry.heartbeat(
+        worker.worker_id,
+        active_runs=3,
+    )
+
+    loaded = registry.get(
+        worker.worker_id
+    )
+
+    assert loaded is not None
+    assert loaded.status == "running"
+    assert loaded.active_runs == 3
