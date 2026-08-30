@@ -352,8 +352,9 @@ def worker_loop() -> None:
                     claim_slots
                 ):
                     record = (
-                        registry.claim_next_queued(
-                            lease_seconds=LEASE_SECONDS
+                        registry.claim_next_queued_for_worker(
+                            worker_id,
+                            lease_seconds=LEASE_SECONDS,
                         )
                     )
 
@@ -376,11 +377,6 @@ def worker_loop() -> None:
 
                     futures[future] = (
                         record.run_id
-                    )
-
-                    worker_registry.heartbeat(
-                        worker_id,
-                        active_runs=len(futures),
                     )
 
                 current_worker = worker_registry.get(
