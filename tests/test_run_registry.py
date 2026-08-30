@@ -228,3 +228,312 @@ def test_registry_migrates_and_tracks_attempts(tmp_path):
 
     assert registry.get("run-1").attempt == 1
     assert registry.get("run-2").attempt == 2
+
+
+def test_claim_next_queued_for_worker_reserves_capacity(
+    tmp_path,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    db = tmp_path / "test.db"
+
+    registry = RunRegistry(db)
+    workers = WorkerRegistry(db)
+
+    worker = workers.register(
+        worker_id="worker-1",
+        concurrency=2,
+    )
+
+    for run_id in ("run-1", "run-2", "run-3"):
+        registry.save(
+            RunRecord(
+                run_id=run_id,
+                objective=f"Objective {run_id}",
+                worker="researcher",
+                research_mode="normal",
+                target_url=None,
+                tool="test",
+                status="queued",
+                started_at=None,
+                completed_at=None,
+                duration_ms=None,
+                result=None,
+                error=None,
+            )
+        )
+
+    first = registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    assert first is not None
+    assert first.status == "running"
+
+    loaded_worker = workers.get(
+        worker.worker_id
+    )
+
+    assert loaded_worker is not None
+    assert loaded_worker.active_runs == 1
+
+    second = registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    assert second is not None
+    assert second.status == "running"
+
+    loaded_worker = workers.get(
+        worker.worker_id
+    )
+
+    assert loaded_worker is not None
+    assert loaded_worker.active_runs == 2
+
+    third = registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    assert third is None
+
+    queued = registry.list_runs(
+        status="queued",
+        limit=10,
+    )
+
+    assert len(queued) == 1
+
+
+def test_claim_next_queued_for_worker_rejects_draining_worker(
+    tmp_path,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    db = tmp_path / "test.db"
+
+    registry = RunRegistry(db)
+    workers = WorkerRegistry(db)
+
+    worker = workers.register(
+        worker_id="worker-draining",
+        concurrency=2,
+    )
+
+    workers.drain(
+        worker.worker_id
+    )
+
+    registry.save(
+        RunRecord(
+            run_id="run-1",
+            objective="Objective",
+            worker="researcher",
+            research_mode="normal",
+            target_url=None,
+            tool="test",
+            status="queued",
+            started_at=None,
+            completed_at=None,
+            duration_ms=None,
+            result=None,
+            error=None,
+        )
+    )
+
+    claimed = registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    assert claimed is None
+
+    loaded = registry.get(
+        "run-1"
+    )
+
+    assert loaded is not None
+    assert loaded.status == "queued"
+
+
+def test_claim_next_queued_for_worker_is_atomic_at_capacity(
+    tmp_path,
+):
+    from tools.worker_registry import WorkerRegistry
+
+    db = tmp_path / "test.db"
+
+    registry = RunRegistry(db)
+    workers = WorkerRegistry(db)
+
+    worker = workers.register(
+        worker_id="worker-full",
+        concurrency=1,
+    )
+
+    registry.save(
+        RunRecord(
+            run_id="run-1",
+            objective="Objective 1",
+            worker="researcher",
+            research_mode="normal",
+            target_url=None,
+            tool="test",
+            status="queued",
+            started_at=None,
+            completed_at=None,
+            duration_ms=None,
+            result=None,
+            error=None,
+        )
+    )
+
+    registry.save(
+        RunRecord(
+            run_id="run-2",
+            objective="Objective 2",
+            worker="researcher",
+            research_mode="normal",
+            target_url=None,
+            tool="test",
+            status="queued",
+            started_at=None,
+            completed_at=None,
+            duration_ms=None,
+            result=None,
+            error=None,
+        )
+    )
+
+    first = registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    assert first is not None
+
+    second = registry.claim_next_queued_for_worker(
+        worker.worker_id
+    )
+
+    assert second is None
+
+    running = registry.list_runs(
+        status="running",
+        limit=10,
+    )
+
+    queued = registry.list_runs(
+        status="queued",
+        limit=10,
+    )
+
+    assert len(running) == 1
+    assert len(queued) == 1
+
+
+def test_concurrent_workers_cannot_overclaim_capacity(
+    tmp_path,
+):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from tools.worker_registry import WorkerRegistry
+
+    db = tmp_path / "test.db"
+
+    registry = RunRegistry(db)
+    workers = WorkerRegistry(db)
+
+    worker_one = workers.register(
+        worker_id="worker-one",
+        concurrency=1,
+    )
+
+    worker_two = workers.register(
+        worker_id="worker-two",
+        concurrency=1,
+    )
+
+    for run_id in ("run-1", "run-2"):
+        registry.save(
+            RunRecord(
+                run_id=run_id,
+                objective=f"Objective {run_id}",
+                worker="researcher",
+                research_mode="normal",
+                target_url=None,
+                tool="test",
+                status="queued",
+                started_at=None,
+                completed_at=None,
+                duration_ms=None,
+                result=None,
+                error=None,
+            )
+        )
+
+    barrier = threading.Barrier(2)
+
+    def claim(worker_id):
+        barrier.wait()
+
+        return registry.claim_next_queued_for_worker(
+            worker_id,
+            lease_seconds=120,
+        )
+
+    with ThreadPoolExecutor(
+        max_workers=2
+    ) as executor:
+        futures = [
+            executor.submit(
+                claim,
+                worker_one.worker_id,
+            ),
+            executor.submit(
+                claim,
+                worker_two.worker_id,
+            ),
+        ]
+
+        results = [
+            future.result()
+            for future in futures
+        ]
+
+    successful = [
+        result
+        for result in results
+        if result is not None
+    ]
+
+    assert len(successful) == 2
+
+    assert {
+        result.run_id
+        for result in successful
+    } == {
+        "run-1",
+        "run-2",
+    }
+
+    assert workers.get(
+        worker_one.worker_id
+    ).active_runs == 1
+
+    assert workers.get(
+        worker_two.worker_id
+    ).active_runs == 1
+
+    assert len(
+        registry.list_runs(
+            status="running",
+            limit=10,
+        )
+    ) == 2
+
+    assert len(
+        registry.list_runs(
+            status="queued",
+            limit=10,
+        )
+    ) == 0
