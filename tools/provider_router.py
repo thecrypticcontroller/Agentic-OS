@@ -233,16 +233,50 @@ class ProviderRouter:
             )
             rank = {decision.provider: index for index, decision in enumerate(decisions)}
 
-            configured = [spec for spec in specs if self._key_for(spec) is not None]
-            unavailable = [spec for spec in specs if self._key_for(spec) is None]
-            configured.sort(
+            configured = [
+                spec
+                for spec in specs
+                if self._key_for(spec) is not None
+            ]
+            unavailable = [
+                spec
+                for spec in specs
+                if self._key_for(spec) is None
+            ]
+            normal = [
+                spec
+                for spec in configured
+                if not spec.reserve_only
+            ]
+            reserve = [
+                spec
+                for spec in configured
+                if spec.reserve_only
+            ]
+
+            normal.sort(
                 key=lambda spec: (
                     rank.get(spec.name, len(rank)),
                     spec.priority,
                     spec.name,
                 )
             )
-            return configured + unavailable
+            unavailable.sort(
+                key=lambda spec: (
+                    rank.get(spec.name, len(rank)),
+                    spec.priority,
+                    spec.name,
+                )
+            )
+            reserve.sort(
+                key=lambda spec: (
+                    rank.get(spec.name, len(rank)),
+                    spec.priority,
+                    spec.name,
+                )
+            )
+
+            return normal + unavailable + reserve
         except Exception:
             return specs
 
