@@ -39,8 +39,8 @@ def test_extract_chain_order():
     assert free_first_chain("web_extract") == ["jina", "exa"]
 
 
-def test_deep_chain_order():
-    assert free_first_chain("deep_research") == ["tavily", "exa"]
+def test_deep_chain_has_no_normal_providers():
+    assert free_first_chain("deep_research") == []
 
 
 def test_reserve_search_is_firecrawl():

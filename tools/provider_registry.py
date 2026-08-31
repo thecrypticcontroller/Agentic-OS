@@ -64,7 +64,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="tavily",
-        capabilities=("web_search", "deep_research"),
+        capabilities=("web_search",),
         free_first=True,
         priority=2,
         requires_api_key=True,
@@ -73,7 +73,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="exa",
-        capabilities=("web_search", "web_extract", "deep_research"),
+        capabilities=("web_search", "web_extract"),
         free_first=True,
         priority=3,
         requires_api_key=True,

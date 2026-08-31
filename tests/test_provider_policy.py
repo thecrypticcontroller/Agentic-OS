@@ -92,3 +92,22 @@ def test_policy_decision_is_compatibility_type():
     )
 
     assert ProviderDecision is ProviderPolicyDecision
+
+def test_research_plan_contains_only_provider_capabilities(monkeypatch):
+    from tools.provider_policy import research_plan
+
+    monkeypatch.setattr(
+        "tools.provider_policy.provider_available",
+        lambda name: True,
+    )
+
+    capabilities = [
+        decision.capability
+        for decision in research_plan()
+    ]
+
+    assert capabilities == [
+        "web_search",
+        "web_extract",
+        "reasoning",
+    ]
