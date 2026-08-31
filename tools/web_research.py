@@ -44,6 +44,8 @@ def _firecrawl():
 def search_web(
     query: str,
     limit: int = 5,
+    *,
+    router=None,
 ) -> list[WebSearchResult]:
     """Free-first provider chain: brave -> tavily -> exa -> firecrawl(reserve).
     Firecrawl is reserve-only and not attempted here (allow_reserve=False)."""
@@ -52,8 +54,10 @@ def search_web(
     if not query:
         raise ValueError("Search query cannot be empty.")
 
-    from tools.provider_router import ProviderRouter
-    router = ProviderRouter()
+    if router is None:
+        from tools.provider_router import ProviderRouter
+        router = ProviderRouter()
+
     return router.search(query, limit=limit, allow_reserve=False)
 
 
@@ -221,6 +225,8 @@ def scrape_web(
 def research_url(
     url: str,
     max_chars: int = 4000,
+    *,
+    router=None,
 ) -> WebPageResult:
     """Extract URL content via free-first router; fall back to direct HTTP.
     Firecrawl is NOT automatically preferred even if its key exists."""
@@ -230,7 +236,9 @@ def research_url(
         raise ValueError("URL cannot be empty.")
 
     from tools.provider_router import ProviderRouter, ProviderUnavailableError
-    router = ProviderRouter()
+
+    if router is None:
+        router = ProviderRouter()
 
     try:
         return router.extract(url, max_chars=max_chars, allow_reserve=False)
