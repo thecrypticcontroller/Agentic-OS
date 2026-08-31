@@ -428,3 +428,103 @@ def test_firecrawl_not_invoked_in_normal_search_path(monkeypatch):
     fc_search.assert_not_called()
     fc_extract.assert_not_called()
     assert report.source_count >= 1
+
+# ---------------------------------------------------------------------------
+# K. Deep-research orchestration
+# ---------------------------------------------------------------------------
+
+def test_deep_research_uses_free_first_orchestrator(monkeypatch):
+    fake_result = mock.Mock(
+        success=True,
+        status="completed",
+        model="test-model",
+        credits_used=None,
+        data={"provider_mode": "free-first"},
+        error=None,
+    )
+
+    monkeypatch.setattr(
+        "tools.deep_research.run_deep_research",
+        lambda prompt: fake_result,
+    )
+
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fake-fc-key")
+
+    with mock.patch("tools.provider_router._firecrawl") as fc_mock:
+        result = ProviderRouter().deep_research(
+            "test deep research",
+            allow_reserve=False,
+        )
+
+    assert result is fake_result
+    fc_mock.assert_not_called()
+
+
+def test_deep_research_uses_free_first_before_firecrawl_reserve(monkeypatch):
+    free_first_result = mock.Mock(
+        success=False,
+        status="failed",
+        model=None,
+        credits_used=None,
+        data={"provider_mode": "free-first"},
+        error="No usable evidence was collected.",
+    )
+
+    reserve_result = mock.Mock(
+        data={"result": "firecrawl"},
+        success=True,
+        status="completed",
+        model="firecrawl-agent",
+        credits_used=1,
+        error=None,
+    )
+
+    monkeypatch.setattr(
+        "tools.deep_research.run_deep_research",
+        lambda prompt: free_first_result,
+    )
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fake-fc-key")
+
+    fake_app = mock.Mock()
+    fake_app.agent.return_value = reserve_result
+
+    with mock.patch(
+        "tools.provider_router._firecrawl",
+        return_value=fake_app,
+    ) as fc_factory:
+        result = ProviderRouter().deep_research(
+            "test deep research",
+            allow_reserve=True,
+        )
+
+    fc_factory.assert_called_once()
+    fake_app.agent.assert_called_once_with(
+        prompt="test deep research"
+    )
+    assert result is reserve_result
+
+
+def test_deep_research_does_not_use_reserve_when_free_first_succeeds(monkeypatch):
+    free_first_result = mock.Mock(
+        success=True,
+        status="completed",
+        model="test-model",
+        credits_used=None,
+        data={"provider_mode": "free-first"},
+        error=None,
+    )
+
+    monkeypatch.setattr(
+        "tools.deep_research.run_deep_research",
+        lambda prompt: free_first_result,
+    )
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fake-fc-key")
+
+    with mock.patch("tools.provider_router._firecrawl") as fc_mock:
+        result = ProviderRouter().deep_research(
+            "test deep research",
+            allow_reserve=True,
+        )
+
+    assert result is free_first_result
+    fc_mock.assert_not_called()

@@ -330,33 +330,94 @@ class ProviderRouter:
         raise ProviderUnavailableError("web_extract", attempts)
 
     def deep_research(self, prompt: str, allow_reserve: bool = False) -> Any:
-        attempts: list[ProviderAttempt] = []
-        for spec in self._ordered_specs("deep_research", allow_reserve):
-            started = time.perf_counter()
-            if spec.name == "firecrawl":
-                key = self._key_for(spec)
-                if key is None:
-                    reason = "FIRECRAWL_API_KEY is not configured"
-                    attempts.append(ProviderAttempt("firecrawl", "skipped", reason))
-                    self._record(provider="firecrawl", operation="deep_research", status="skipped", started=started)
-                    continue
-                try:
-                    app = _firecrawl()
-                    if app is None:
-                        raise ProviderExecutionError("key present but client failed")
-                    result = app.agent(prompt=prompt)
-                    attempts.append(ProviderAttempt("firecrawl", "success", None))
-                    self._record(provider="firecrawl", operation="deep_research", status="success", started=started)
-                    return result
-                except Exception as exc:
-                    reason = _safe_reason(exc)
-                    attempts.append(ProviderAttempt("firecrawl", "failed", reason))
-                    self._record(provider="firecrawl", operation="deep_research", status="failed", started=started, reason=reason)
-            else:
-                reason = "no deep-research agent adapter implemented"
-                attempts.append(ProviderAttempt(spec.name, "skipped", reason))
-                self._record(provider=spec.name, operation="deep_research", status="skipped", started=started, reason=reason)
-        raise ProviderUnavailableError("deep_research", attempts)
+        if not prompt.strip():
+            raise ValueError("Deep research prompt cannot be empty.")
+
+        from tools.deep_research import run_deep_research
+
+        # The canonical normal path is the existing free-first deep-research
+        # orchestration. It composes this router's search/extract capabilities.
+        result = run_deep_research(prompt)
+
+        if result.success or not allow_reserve:
+            return result
+
+        # Reserve use is explicit: only after free-first orchestration fails.
+        spec = next(
+            (
+                item
+                for item in self._ordered_specs(
+                    "deep_research",
+                    allow_reserve=True,
+                )
+                if item.name == "firecrawl"
+            ),
+            None,
+        )
+
+        started = time.perf_counter()
+
+        if spec is None:
+            reason = "no reserve provider configured"
+            self._record(
+                provider="firecrawl",
+                operation="deep_research",
+                status="skipped",
+                started=started,
+                reason=reason,
+            )
+            raise ProviderUnavailableError(
+                "deep_research",
+                [ProviderAttempt("firecrawl", "skipped", reason)],
+            )
+
+        key = self._key_for(spec)
+
+        if key is None:
+            reason = "FIRECRAWL_API_KEY is not configured"
+            self._record(
+                provider="firecrawl",
+                operation="deep_research",
+                status="skipped",
+                started=started,
+                reason=reason,
+            )
+            raise ProviderUnavailableError(
+                "deep_research",
+                [ProviderAttempt("firecrawl", "skipped", reason)],
+            )
+
+        try:
+            app = _firecrawl()
+
+            if app is None:
+                raise ProviderExecutionError(
+                    "key present but client failed"
+                )
+
+            reserve_result = app.agent(prompt=prompt)
+
+            self._record(
+                provider="firecrawl",
+                operation="deep_research",
+                status="success",
+                started=started,
+            )
+            return reserve_result
+
+        except Exception as exc:
+            reason = _safe_reason(exc)
+            self._record(
+                provider="firecrawl",
+                operation="deep_research",
+                status="failed",
+                started=started,
+                reason=reason,
+            )
+            raise ProviderUnavailableError(
+                "deep_research",
+                [ProviderAttempt("firecrawl", "failed", reason)],
+            ) from exc
 
 
 def _safe_reason(exc: Exception) -> str:
