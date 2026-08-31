@@ -9,7 +9,7 @@ from tools.web_research import WebSearchResult
 def test_deep_research_is_free_first_and_deduplicates(monkeypatch):
     calls: list[str] = []
 
-    def fake_search(query: str, limit: int = 5):
+    def fake_search(query: str, limit: int = 5, **kwargs):
         calls.append(query)
         return [
             WebSearchResult(
@@ -26,7 +26,7 @@ def test_deep_research_is_free_first_and_deduplicates(monkeypatch):
             ),
         ]
 
-    def fake_research_url(url: str, max_chars: int = 4000):
+    def fake_research_url(url: str, max_chars: int = 4000, **kwargs):
         return ResearchURLResult(
             url=url,
             title="Source title",
@@ -69,7 +69,7 @@ def test_deep_research_is_free_first_and_deduplicates(monkeypatch):
 def test_deep_research_reports_no_evidence(monkeypatch):
     monkeypatch.setattr(
         "tools.deep_research.search_web",
-        lambda query, limit=5: [],
+        lambda query, limit=5, **kwargs: [],
     )
 
     result = run_deep_research(

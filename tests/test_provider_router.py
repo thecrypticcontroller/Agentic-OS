@@ -445,7 +445,7 @@ def test_deep_research_uses_free_first_orchestrator(monkeypatch):
 
     monkeypatch.setattr(
         "tools.deep_research.run_deep_research",
-        lambda prompt: fake_result,
+        lambda prompt, **kwargs: fake_result,
     )
 
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fake-fc-key")
@@ -481,7 +481,7 @@ def test_deep_research_uses_free_first_before_firecrawl_reserve(monkeypatch):
 
     monkeypatch.setattr(
         "tools.deep_research.run_deep_research",
-        lambda prompt: free_first_result,
+        lambda prompt, **kwargs: free_first_result,
     )
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fake-fc-key")
 
@@ -516,7 +516,7 @@ def test_deep_research_does_not_use_reserve_when_free_first_succeeds(monkeypatch
 
     monkeypatch.setattr(
         "tools.deep_research.run_deep_research",
-        lambda prompt: free_first_result,
+        lambda prompt, **kwargs: free_first_result,
     )
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fake-fc-key")
 
@@ -528,3 +528,44 @@ def test_deep_research_does_not_use_reserve_when_free_first_succeeds(monkeypatch
 
     assert result is free_first_result
     fc_mock.assert_not_called()
+
+def test_deep_research_reuses_router_observability_context(
+    monkeypatch,
+    tmp_path,
+):
+    from tools.provider_observability import ProviderObservability
+
+    observer = ProviderObservability(
+        tmp_path / "deep-observability.db"
+    )
+    router = ProviderRouter(
+        observer=observer,
+        run_id="deep-run-1",
+    )
+
+    captured = {}
+
+    def fake_run_deep_research(prompt, *, router):
+        captured["prompt"] = prompt
+        captured["router"] = router
+        return mock.Mock(
+            success=True,
+            status="completed",
+            model="test-model",
+            credits_used=None,
+            data={"provider_mode": "free-first"},
+            error=None,
+        )
+
+    monkeypatch.setattr(
+        "tools.deep_research.run_deep_research",
+        fake_run_deep_research,
+    )
+
+    result = router.deep_research("trace this")
+
+    assert result.success is True
+    assert captured["prompt"] == "trace this"
+    assert captured["router"] is router
+    assert captured["router"].observer is observer
+    assert captured["router"].run_id == "deep-run-1"

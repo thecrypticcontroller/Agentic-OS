@@ -61,6 +61,7 @@ def _query_variants(query: str) -> list[str]:
 def _collect_evidence(
     query: str,
     *,
+    router=None,
     queries: int = 3,
     results_per_query: int = 5,
     max_sources: int = 8,
@@ -74,6 +75,7 @@ def _collect_evidence(
         results = search_web(
             search_query,
             limit=results_per_query,
+            router=router,
         )
 
         for result in results:
@@ -91,6 +93,7 @@ def _collect_evidence(
                 page = research_url(
                     url,
                     max_chars=max_chars_per_item,
+                    router=router,
                 )
             except Exception:
                 continue
@@ -168,6 +171,7 @@ def _synthesis_data(
 def run_deep_research(
     prompt: str,
     *,
+    router=None,
     queries: int = 3,
     results_per_query: int = 5,
     max_sources: int = 8,
@@ -183,6 +187,7 @@ def run_deep_research(
     try:
         raw_evidence, _providers = _collect_evidence(
             query,
+            router=router,
             queries=queries,
             results_per_query=results_per_query,
             max_sources=max_sources,

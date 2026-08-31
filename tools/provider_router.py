@@ -337,7 +337,10 @@ class ProviderRouter:
 
         # The canonical normal path is the existing free-first deep-research
         # orchestration. It composes this router's search/extract capabilities.
-        result = run_deep_research(prompt)
+        result = run_deep_research(
+            prompt,
+            router=self,
+        )
 
         if result.success or not allow_reserve:
             return result
