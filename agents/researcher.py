@@ -72,10 +72,13 @@ class DeepResearchResult:
 def research_url(
     url: str,
     max_chars: int = 4000,
+    *,
+    router=None,
 ) -> ResearchURLResult:
     result = _research_url(
         url,
         max_chars=max_chars,
+        router=router,
     )
 
     return ResearchURLResult(

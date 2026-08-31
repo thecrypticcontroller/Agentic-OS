@@ -569,3 +569,85 @@ def test_deep_research_reuses_router_observability_context(
     assert captured["router"] is router
     assert captured["router"].observer is observer
     assert captured["router"].run_id == "deep-run-1"
+
+def test_deep_research_nested_search_uses_same_observability_context(
+    monkeypatch,
+    tmp_path,
+):
+    from tools.provider_observability import ProviderObservability
+
+    observer = ProviderObservability(
+        tmp_path / "deep-e2e.db"
+    )
+
+    router = ProviderRouter(
+        observer=observer,
+        run_id="deep-run-1",
+    )
+
+    monkeypatch.setenv("BRAVE_API_KEY", "fake-brave-key")
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+    monkeypatch.setenv("EXA_API_KEY", "")
+
+    fake_results = [
+        WebSearchResult(
+            url="https://example.com",
+            title="Example",
+            position=1,
+        )
+    ]
+
+    fake_page = WebPageResult(
+        url="https://example.com",
+        title="Example",
+        markdown=(
+            "This is sufficiently long example content for the deep "
+            "research observability integration test. It contains "
+            "enough factual-looking material to pass the content "
+            "quality threshold and exercise the nested provider path."
+        ),
+        source="jina",
+    )
+
+    with mock.patch(
+        "tools.provider_router._brave_search",
+        return_value=fake_results,
+    ):
+        with mock.patch(
+            "tools.provider_router._jina_extract",
+            return_value=fake_page,
+        ):
+            with mock.patch(
+                "tools.deep_research.synthesize",
+                return_value=mock.Mock(
+                    query="deep observability test",
+                    answer="ok",
+                    key_findings=[],
+                    citations=[],
+                    caveats=[],
+                ),
+            ):
+                with mock.patch(
+                    "tools.deep_research.get_model",
+                    return_value=mock.Mock(
+                        name="test-model",
+                    ),
+                ):
+                    result = router.deep_research(
+                        "deep observability test"
+                    )
+
+    assert result.success is True
+
+    events = observer.recent(
+        run_id="deep-run-1",
+        limit=10,
+    )
+
+    assert any(
+        event.provider == "brave"
+        and event.operation == "search"
+        and event.status == "success"
+        and event.run_id == "deep-run-1"
+        for event in events
+    )
