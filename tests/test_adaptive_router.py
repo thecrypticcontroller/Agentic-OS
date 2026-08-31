@@ -54,3 +54,36 @@ def test_adaptive_routing_keeps_reserve_out_without_explicit_permission(monkeypa
         results = router.search("test", limit=1, allow_reserve=False)
 
     assert results[0].url == "https://example.com"
+
+def test_adaptive_routing_keeps_reserve_after_normal_providers_when_allowed(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("AGENT_OS_ADAPTIVE_ROUTING", "true")
+    monkeypatch.setenv("BRAVE_API_KEY", "brave-key")
+    monkeypatch.setenv("TAVILY_API_KEY", "tavily-key")
+    monkeypatch.setenv("EXA_API_KEY", "exa-key")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "firecrawl-key")
+
+    observer = ProviderObservability(tmp_path / "reserve-order.db")
+    router = ProviderRouter(observer=observer)
+
+    with mock.patch(
+        "tools.provider_router.ProviderDecisionEngine.rank"
+    ) as rank:
+        rank.return_value = [
+            mock.Mock(provider="firecrawl"),
+            mock.Mock(provider="tavily"),
+            mock.Mock(provider="brave"),
+            mock.Mock(provider="exa"),
+        ]
+
+        specs = router._ordered_specs(
+            "web_search",
+            allow_reserve=True,
+        )
+
+    names = [item.name for item in specs]
+
+    assert names[-1] == "firecrawl"
+    assert set(names[:-1]) == {"brave", "tavily", "exa"}
