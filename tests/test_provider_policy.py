@@ -69,3 +69,26 @@ def test_choose_jina_keeps_firecrawl_as_reserve():
 
     assert decision.provider == "jina"
     assert decision.reserve == "firecrawl"
+
+def test_policy_reserve_is_metadata_only_when_normal_provider_missing(monkeypatch):
+    from tools.provider_policy import choose_provider
+
+    monkeypatch.setenv("BRAVE_API_KEY", "")
+    monkeypatch.setenv("TAVILY_API_KEY", "")
+    monkeypatch.setenv("EXA_API_KEY", "")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "test-firecrawl-key")
+
+    try:
+        choose_provider("web_search")
+        assert False, "Expected normal-provider failure"
+    except RuntimeError as exc:
+        assert "No normal provider available" in str(exc)
+
+
+def test_policy_decision_is_compatibility_type():
+    from tools.provider_policy import (
+        ProviderDecision,
+        ProviderPolicyDecision,
+    )
+
+    assert ProviderDecision is ProviderPolicyDecision

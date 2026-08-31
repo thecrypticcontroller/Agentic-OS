@@ -12,7 +12,16 @@ from tools.provider_registry import (
 
 
 @dataclass(frozen=True)
-class ProviderDecision:
+class ProviderPolicyDecision:
+    """
+    Backward-compatible static provider-policy decision.
+
+    Canonical provider capability/order metadata lives in
+    tools.provider_registry. Runtime execution belongs to
+    tools.provider_router; adaptive ranking belongs to
+    tools.provider_decision.
+    """
+
     capability: Capability
     provider: str
     fallbacks: tuple[str, ...]
@@ -20,7 +29,13 @@ class ProviderDecision:
     reason: str
 
 
+# Backward compatibility for existing callers that imported
+# ProviderDecision from this module.
+ProviderDecision = ProviderPolicyDecision
+
+
 def provider_available(name: str) -> bool:
+    """Return whether a registry-defined provider is configured."""
     provider = get_provider(name)
 
     if not provider.requires_api_key:
@@ -29,61 +44,47 @@ def provider_available(name: str) -> bool:
     if not provider.env_key:
         return False
 
-    return bool(
-        os.getenv(provider.env_key)
-    )
+    return bool(os.getenv(provider.env_key))
 
 
 def choose_provider(
     capability: Capability,
-) -> ProviderDecision:
+) -> ProviderPolicyDecision:
+    """
+    Choose the highest-priority configured provider.
+
+    This is the static compatibility policy. It intentionally does
+    not perform runtime execution, health-based ranking, or automatic
+    reserve-provider activation.
+    """
     chain = [
         name
-        for name in free_first_chain(
-            capability
-        )
+        for name in free_first_chain(capability)
         if provider_available(name)
     ]
 
-    reserve = reserve_provider(
-        capability
-    )
+    reserve = reserve_provider(capability)
 
     if not chain:
-        if reserve and provider_available(
-            reserve
-        ):
-            return ProviderDecision(
-                capability=capability,
-                provider=reserve,
-                fallbacks=(),
-                reserve=reserve,
-                reason=(
-                    "No normal free-first provider is "
-                    "available; using protected reserve."
-                ),
-            )
-
         raise RuntimeError(
-            f"No available provider for capability: "
+            f"No normal provider available for capability: "
             f"{capability}"
         )
 
-    return ProviderDecision(
+    return ProviderPolicyDecision(
         capability=capability,
         provider=chain[0],
-        fallbacks=tuple(
-            chain[1:]
-        ),
+        fallbacks=tuple(chain[1:]),
         reserve=reserve,
         reason=(
             "Selected the highest-priority available "
-            "free-first provider."
+            "free-first provider. Reserve providers are "
+            "not activated automatically."
         ),
     )
 
 
-def research_plan() -> list[ProviderDecision]:
+def research_plan() -> list[ProviderPolicyDecision]:
     return [
         choose_provider("web_search"),
         choose_provider("web_extract"),
@@ -92,7 +93,7 @@ def research_plan() -> list[ProviderDecision]:
     ]
 
 
-def creative_plan() -> list[ProviderDecision]:
+def creative_plan() -> list[ProviderPolicyDecision]:
     return [
         choose_provider("image_generation"),
         choose_provider("image_editing"),

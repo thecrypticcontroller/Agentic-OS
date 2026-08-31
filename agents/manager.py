@@ -217,9 +217,9 @@ class Manager:
         elif job.research_mode == "deep":
             tool = "free-first-deep-research"
         elif target_url:
-            tool = "firecrawl.scrape"
+            tool = "provider-router.extract"
         else:
-            tool = "firecrawl.search+scrape"
+            tool = "provider-router.search+extract"
 
         return ExecutionPlan(
             worker=worker,
@@ -333,9 +333,9 @@ class Manager:
                     "free-first-deep-research"
                     if job.research_mode == "deep"
                     else (
-                        "firecrawl.scrape"
+                        "provider-router.extract"
                         if job.target_url
-                        else "firecrawl.search+scrape"
+                        else "provider-router.search+extract"
                     )
                 )
             ),
@@ -373,14 +373,14 @@ class Manager:
                 worker=job.worker,
                 research_mode=job.research_mode,
                 target_url=job.target_url,
-                tool="firecrawl.scrape",
+                tool="provider-router.extract",
             )
         else:
             plan = ExecutionPlan(
                 worker=job.worker,
                 research_mode=job.research_mode,
                 target_url=None,
-                tool="firecrawl.search+scrape",
+                tool="provider-router.search+extract",
             )
 
         job.status = "running"

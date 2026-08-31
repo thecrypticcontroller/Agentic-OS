@@ -203,7 +203,7 @@ def test_plan_normal_research():
     assert plan.worker == "researcher"
     assert plan.research_mode == "normal"
     assert plan.target_url is None
-    assert plan.tool == "firecrawl.search+scrape"
+    assert plan.tool == "provider-router.search+extract"
 
 
 def test_plan_deep_research():
@@ -416,3 +416,25 @@ def test_retry_allows_retryable_failure(tmp_path, monkeypatch):
     assert retried.id != original.id
     assert retried.parent_run_id == original.id
     assert retried.attempt == 2
+
+def test_manager_plan_uses_provider_router_for_url_research():
+    from agents.manager import Manager
+
+    plan = Manager().plan(
+        "Research this URL https://example.com"
+    )
+
+    assert plan.worker == "researcher"
+    assert plan.target_url == "https://example.com"
+    assert plan.tool == "provider-router.extract"
+
+
+def test_manager_plan_uses_provider_router_for_search_research():
+    from agents.manager import Manager
+
+    plan = Manager().plan(
+        "Research Python async patterns"
+    )
+
+    assert plan.worker == "researcher"
+    assert plan.tool == "provider-router.search+extract"
