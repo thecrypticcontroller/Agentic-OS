@@ -88,7 +88,6 @@ def research_plan() -> list[ProviderPolicyDecision]:
     return [
         choose_provider("web_search"),
         choose_provider("web_extract"),
-        choose_provider("deep_research"),
         choose_provider("reasoning"),
     ]
 
