@@ -25,3 +25,5 @@ data/
 logs/
 
 PROJECT_TREE.txt
+
+agent_os.db
